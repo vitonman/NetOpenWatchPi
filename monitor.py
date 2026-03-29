@@ -3,9 +3,9 @@
 import os
 import time
 import threading
-import sys
 import psutil
 import socket
+
 from core.metrics import metrics
 from core.network_collector import NetworkCollector
 from core.alert_manager import AlertManager
@@ -30,6 +30,13 @@ class MonitorApp:
             except Exception:
                 pass
             time.sleep(2)
+
+    def _parse_arg(self, raw_cmd: str, usage: str):
+        parts = raw_cmd.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            print(f"Usage: {usage}")
+            return None
+        return parts[1].strip()
 
     def run(self):
         print_startup_info()
@@ -56,22 +63,41 @@ class MonitorApp:
                     self.top()
                 elif cmd == "network processes":
                     self.network_processes_list()
-                elif cmd.startswith("processinfo "):
-                    _, name = raw_cmd.split(" ", 1)
-                    self.process_info(name.strip())
-                elif cmd.startswith("pidinfo "):
-                    _, pid = raw_cmd.split(" ", 1)
-                    self.process_info(pid.strip())
+                elif cmd.startswith("processinfo"):
+                    arg = self._parse_arg(raw_cmd, "processinfo <name.exe>")
+                    if arg is not None:
+                        self.process_info(arg)
+                elif cmd.startswith("pidinfo"):
+                    arg = self._parse_arg(raw_cmd, "pidinfo <pid>")
+                    if arg is not None:
+                        self.process_info(arg)
+                elif cmd == "hwinfo":
+                    self._print_hwinfo(metrics.get_hardware_info())
+                elif cmd == "cpuinfo":
+                    self._print_cpu_info(metrics.get_hardware_info().get("cpu", {}))
+                elif cmd == "raminfo":
+                    hw = metrics.get_hardware_info()
+                    self._print_memory_info(hw.get("ram", {}), hw.get("swap", {}))
+                elif cmd == "diskinfo":
+                    self._print_disk_info(metrics.get_hardware_info().get("disk", {}))
+                elif cmd == "netinfo":
+                    self._print_network_info(metrics.get_hardware_info().get("network", {}))
+                elif cmd == "gpuinfo":
+                    self._print_gpu_info(metrics.get_hardware_info().get("gpu", {}))
+                elif cmd == "temps":
+                    self._print_temps_info(metrics.get_hardware_info().get("temperatures", {}))
                 elif cmd == "alerts":
                     self.check_alerts()
                 elif cmd in ["list", "ignore"]:
                     self.show_ignore_list()
                 elif cmd.startswith("add "):
-                    _, value = raw_cmd.split(" ", 1)
-                    self.add_ignore(value.strip())
+                    arg = self._parse_arg(raw_cmd, "add <name|number>")
+                    if arg is not None:
+                        self.add_ignore(arg)
                 elif cmd.startswith("remove "):
-                    _, value = raw_cmd.split(" ", 1)
-                    self.remove_ignore(value.strip())
+                    arg = self._parse_arg(raw_cmd, "remove <name>")
+                    if arg is not None:
+                        self.remove_ignore(arg)
                 elif cmd == "clear":
                     os.system("cls" if os.name == "nt" else "clear")
                 elif cmd == "gui":
@@ -133,11 +159,7 @@ class MonitorApp:
             print("No active external connections found.")
             return
 
-        sorted_stats = sorted(
-            proc_stats.items(),
-            key=lambda item: item[1]["connections"],
-            reverse=True,
-        )
+        sorted_stats = sorted(proc_stats.items(), key=lambda item: item[1]["connections"], reverse=True)
 
         for (pid, name), data in sorted_stats:
             ext_conn = data["connections"]
@@ -154,6 +176,106 @@ class MonitorApp:
 
         processes = self.collector.collect_network_data()
         print(f"Total processes with network activity: {len(processes)}")
+
+    def _print_hwinfo(self, hw):
+        system = hw.get("system", {})
+        cpu = hw.get("cpu", {})
+        ram = hw.get("ram", {})
+        swap = hw.get("swap", {})
+        disk = hw.get("disk", {})
+        network = hw.get("network", {})
+        gpu = hw.get("gpu", {})
+        temps = hw.get("temperatures", {})
+
+        print("\n" + "=" * 80)
+        print(f" HARDWARE INFO at {time.strftime('%H:%M:%S')}")
+        print("=" * 80)
+
+        self._print_system_info(system)
+        self._print_cpu_info(cpu)
+        self._print_memory_info(ram, swap)
+        self._print_disk_info(disk)
+        self._print_network_info(network)
+        self._print_gpu_info(gpu)
+        self._print_temps_info(temps)
+
+        print("=" * 80)
+
+    def _print_system_info(self, system):
+        print("SYSTEM")
+        print(f"  OS           : {system.get('os', 'N/A')} {system.get('os_release', '')}")
+        print(f"  Hostname     : {system.get('hostname', 'N/A')}")
+        print(f"  Machine      : {system.get('machine', 'N/A')}")
+        print(f"  Processor    : {system.get('processor', 'N/A')}")
+        print(f"  Uptime (sec) : {system.get('uptime_sec', 'N/A')}")
+        print("-" * 80)
+
+    def _print_cpu_info(self, cpu):
+        freq = cpu.get("frequency_mhz", {})
+        print("CPU")
+        print(f"  Cores        : {cpu.get('physical_cores', 'N/A')} physical / {cpu.get('logical_cores', 'N/A')} logical")
+        print(f"  Usage        : {cpu.get('usage_percent_total', 'N/A')} %")
+        print(
+            f"  Frequency    : current={freq.get('current', 'N/A')} MHz, "
+            f"min={freq.get('min', 'N/A')} MHz, max={freq.get('max', 'N/A')} MHz"
+        )
+        per_core = cpu.get("usage_percent_per_core", [])
+        if per_core:
+            print("  Per-core     : " + ", ".join(f"{v:.1f}%" for v in per_core))
+        print("-" * 80)
+
+    def _print_memory_info(self, ram, swap):
+        print("MEMORY")
+        print(f"  RAM          : {ram.get('used_mb', 'N/A')} / {ram.get('total_mb', 'N/A')} MB ({ram.get('percent', 'N/A')}%)")
+        print(f"  RAM Avail    : {ram.get('available_mb', 'N/A')} MB")
+        print(f"  SWAP         : {swap.get('used_mb', 'N/A')} / {swap.get('total_mb', 'N/A')} MB ({swap.get('percent', 'N/A')}%)")
+        print("-" * 80)
+
+    def _print_disk_info(self, disk):
+        print("DISK")
+        parts = disk.get("partitions", [])
+        if parts:
+            for p in parts:
+                print(
+                    f"  {p.get('device', 'N/A')} ({p.get('fstype', 'N/A')}) "
+                    f"{p.get('used_gb', 'N/A')} / {p.get('total_gb', 'N/A')} GB ({p.get('percent', 'N/A')}%)"
+                )
+        else:
+            print("  N/A")
+        print("-" * 80)
+
+    def _print_network_info(self, network):
+        print("NETWORK")
+        io_total = network.get("io_total", {})
+        if io_total:
+            print(f"  Sent bytes   : {io_total.get('bytes_sent', 'N/A')}")
+            print(f"  Recv bytes   : {io_total.get('bytes_recv', 'N/A')}")
+            print(f"  Sent packets : {io_total.get('packets_sent', 'N/A')}")
+            print(f"  Recv packets : {io_total.get('packets_recv', 'N/A')}")
+        else:
+            print("  N/A")
+        print("-" * 80)
+
+    def _print_gpu_info(self, gpu):
+        print("GPU")
+        devices = gpu.get("devices", [])
+        if devices:
+            for g in devices:
+                print(f"  Name         : {g.get('name', 'N/A')} ({g.get('vendor', 'N/A')})")
+                print(f"  Usage        : {g.get('usage_percent', 'N/A')} %")
+                print(f"  Memory       : {g.get('memory_used_mb', 'N/A')} / {g.get('memory_total_mb', 'N/A')} MB")
+                print(f"  Temperature  : {g.get('temperature_c', 'N/A')} C")
+                print(f"  Source       : {g.get('source', 'N/A')}")
+        else:
+            print("  N/A")
+        print("-" * 80)
+
+    def _print_temps_info(self, temps):
+        print("TEMPERATURES")
+        print(f"  CPU Temp     : {temps.get('cpu_temp_c', 'N/A')}")
+        print(f"  GPU Temp     : {temps.get('gpu_temp_c', 'N/A')}")
+        print(f"  Source       : {temps.get('source', 'N/A')}")
+        print("-" * 80)
 
     def top(self, limit=15, with_header=True):
         if with_header:
@@ -307,6 +429,13 @@ class MonitorApp:
         print("  network processes          show external connections summary")
         print("  processinfo <name.exe>     show connections for process name")
         print("  pidinfo <pid>              show connections for exact PID")
+        print("  hwinfo                     show full hardware overview")
+        print("  cpuinfo                    show CPU info")
+        print("  raminfo                    show RAM/SWAP info")
+        print("  diskinfo                   show disk info")
+        print("  netinfo                    show network info")
+        print("  gpuinfo                    show GPU info")
+        print("  temps                      show temperatures info")
         print("  alerts                     run anomaly check now")
         print("  list | ignore              show ignore list")
         print("  add <name|number>          add ignore by process name or top index")
