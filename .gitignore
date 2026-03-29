@@ -1,0 +1,96 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+
+# Logs and databases
+*.log
+*.sqlite3
+*.db
+*.db-journal
+
+# Dependency directories (if you have any)
+node_modules/
+bower_components/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Raspberry Pi / Linux-specific
+*.swp
+*.swo
+*~
+.bash_history
+.bash_logout
+.bash_profile
+.profile
+.ssh/
+
+# Project-specific (твои файлы, которые не надо коммитить)
+config.json              
+*.env
+secrets.*
+icon.png                 
+*.pyc
+*.exe                     
+dist/
+*.spec                 
+
+# Тестовые/временные файлы
+test_*.py
+temp/
+tmp/
+backup/
+*.bak
+*.tmp
+
+# Jupyter / эксперименты (если будешь пробовать)
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# FastAPI / uvicorn логи (если запустишь на Pi)
+uvicorn.log
+access.log
+error.log
