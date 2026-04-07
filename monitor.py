@@ -3,9 +3,11 @@
 import os
 import time
 import threading
+import sys
+import json
 import psutil
 import socket
-
+from collections import defaultdict
 from core.metrics import metrics
 from core.network_collector import NetworkCollector
 from core.alert_manager import AlertManager
@@ -21,6 +23,7 @@ class MonitorApp:
         self.alert_manager = AlertManager(self.ignore_list)
         self.running = True
         self.last_top_processes = []
+     
 
     def background_monitor(self):
         """Silent background thread"""
@@ -30,13 +33,6 @@ class MonitorApp:
             except Exception:
                 pass
             time.sleep(2)
-
-    def _parse_arg(self, raw_cmd: str, usage: str):
-        parts = raw_cmd.split(maxsplit=1)
-        if len(parts) < 2 or not parts[1].strip():
-            print(f"Usage: {usage}")
-            return None
-        return parts[1].strip()
 
     def run(self):
         print_startup_info()
@@ -63,47 +59,52 @@ class MonitorApp:
                     self.top()
                 elif cmd == "network processes":
                     self.network_processes_list()
-                elif cmd.startswith("processinfo"):
-                    arg = self._parse_arg(raw_cmd, "processinfo <name.exe>")
-                    if arg is not None:
-                        self.process_info(arg)
-                elif cmd.startswith("pidinfo"):
-                    arg = self._parse_arg(raw_cmd, "pidinfo <pid>")
-                    if arg is not None:
-                        self.process_info(arg)
-                elif cmd == "hwinfo":
-                    self._print_hwinfo(metrics.get_hardware_info())
-                elif cmd == "cpuinfo":
-                    self._print_cpu_info(metrics.get_hardware_info().get("cpu", {}))
-                elif cmd == "raminfo":
-                    hw = metrics.get_hardware_info()
-                    self._print_memory_info(hw.get("ram", {}), hw.get("swap", {}))
-                elif cmd == "diskinfo":
-                    self._print_disk_info(metrics.get_hardware_info().get("disk", {}))
-                elif cmd == "netinfo":
-                    self._print_network_info(metrics.get_hardware_info().get("network", {}))
-                elif cmd == "gpuinfo":
-                    self._print_gpu_info(metrics.get_hardware_info().get("gpu", {}))
+                elif cmd == "threats":
+                    self.show_threats()
+                elif cmd == "stats":
+                    self.show_stats()
+                elif cmd == "risks":
+                    self.show_risks()
+                elif cmd.startswith("processinfo "):
+                    _, name = raw_cmd.split(" ", 1)
+                    self.process_info(name.strip())
+                elif cmd.startswith("pidinfo "):
+                    _, pid = raw_cmd.split(" ", 1)
+                    self.process_info(pid.strip())
                 elif cmd == "temps":
-                    self._print_temps_info(metrics.get_hardware_info().get("temperatures", {}))
+                    temps = metrics.get_hardware_info().get("temperatures", {})
+                    self._print_temps_info(temps)
+                elif cmd == "hwinfo":
+                    hw = metrics.get_hardware_info()
+                    self._print_hwinfo(hw)
                 elif cmd == "alerts":
                     self.check_alerts()
+                elif cmd == "alertswatch":
+                    self.alerts_watch()
+                elif cmd.startswith("alertswatch "):
+                    _, raw_interval = raw_cmd.split(" ", 1)
+                    self.alerts_watch(raw_interval.strip())
+                elif cmd == "alertslog":
+                    self.show_alerts_log()
+                elif cmd.startswith("alertslog "):
+                    _, raw_limit = raw_cmd.split(" ", 1)
+                    self.show_alerts_log(raw_limit.strip())
                 elif cmd in ["list", "ignore"]:
                     self.show_ignore_list()
                 elif cmd.startswith("add "):
-                    arg = self._parse_arg(raw_cmd, "add <name|number>")
-                    if arg is not None:
-                        self.add_ignore(arg)
+                    _, value = raw_cmd.split(" ", 1)
+                    self.add_ignore(value.strip())
                 elif cmd.startswith("remove "):
-                    arg = self._parse_arg(raw_cmd, "remove <name>")
-                    if arg is not None:
-                        self.remove_ignore(arg)
+                    _, value = raw_cmd.split(" ", 1)
+                    self.remove_ignore(value.strip())
                 elif cmd == "clear":
                     os.system("cls" if os.name == "nt" else "clear")
                 elif cmd == "gui":
                     self.open_gui()
                 elif cmd == "help":
                     self.show_help()
+                elif cmd == "permdiag":
+                    self.permissions_diag()
                 else:
                     print("Unknown command. Type 'help'.")
         except KeyboardInterrupt:
@@ -111,6 +112,137 @@ class MonitorApp:
         finally:
             self.running = False
             print("\nProgram stopped.")
+
+    def show_threats(self):
+        from core.threat_engine import threat_engine
+        
+        print("\n" + "=" * 80)
+        print(f" THREAT DATABASE & WHITELIST at {time.strftime('%H:%M:%S')}")
+        print("=" * 80)
+
+        print("MALICIOUS IPs:")
+        for ip in threat_engine.threats.get("malicious_ips", []):
+            print(f"  â€¢ {ip}")
+
+        print("\nSUSPICIOUS PORTS:")
+        print("  " + ", ".join(map(str, threat_engine.threats.get("suspicious_ports", []))))
+
+        print("\nKNOWN MALWARE PROCESSES:")
+        for p in threat_engine.threats.get("known_malware_processes", []):
+            print(f"  â€¢ {p}")
+
+        print("\nWHITELIST - TRUSTED PROCESSES:")
+        for p in threat_engine.whitelist.get("trusted_processes", []):
+            print(f"  â€¢ {p}")
+
+        print("\nWHITELIST - TRUSTED IPs:")
+        for ip in threat_engine.whitelist.get("trusted_ips", []):
+            print(f"  â€¢ {ip}")
+        print("=" * 80)
+
+        print()
+
+    def show_risks(self):
+        """Show global risk summary for all active network processes"""
+        from core.threat_engine import threat_engine
+        from collections import defaultdict
+        import psutil
+
+        print("\n" + "=" * 90)
+        print(" GLOBAL RISK SUMMARY - ALL ACTIVE CONNECTIONS")
+        print("=" * 90)
+
+        processes = self.collector.collect_network_data()
+
+        total_critical = 0
+        total_warn = 0
+        total_info = 0
+        risky_found = False
+
+        for name, data in sorted(processes.items(), key=lambda x: x[1]["connections"], reverse=True):
+            if data["connections"] == 0:
+                continue
+
+            conn_list = []
+            has_risk = False
+
+            seen = set()
+
+            for conn in psutil.net_connections(kind="inet4"):
+                if conn.pid is None:
+                    continue
+                try:
+                    pname = psutil.Process(conn.pid).name()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                if pname != name:
+                    continue
+
+                remote_ip = getattr(conn.raddr, "ip", None) if conn.raddr else None
+                remote_port = getattr(conn.raddr, "port", None) if conn.raddr else None
+
+                # ÐŸÑ€Ð¾Ð¿ÑƒÑÐºÐ°ÐµÐ¼ Ð´ÑƒÐ±Ð»Ð¸ÐºÐ°Ñ‚Ñ‹ Ð¾Ð´Ð½Ð¾Ð³Ð¾ Ð¸ Ñ‚Ð¾Ð³Ð¾ Ð¶Ðµ IP
+                if remote_ip is None or (name, remote_ip) in seen:
+                    continue
+                seen.add((name, remote_ip))
+
+                flags = threat_engine.analyze_connection(name, remote_ip, remote_port)
+
+                # ÐžÐ¿Ñ€ÐµÐ´ÐµÐ»ÑÐµÐ¼ ÑÐ°Ð¼Ñ‹Ð¹ Ð²Ñ‹ÑÐ¾ÐºÐ¸Ð¹ ÑƒÑ€Ð¾Ð²ÐµÐ½ÑŒ ÑƒÐ³Ñ€Ð¾Ð·Ñ‹
+                severity = "INFO"
+                reason = "NORMAL"
+                for f in flags:
+                    if f["severity"] == "CRITICAL":
+                        severity = "CRITICAL"
+                        reason = f["reason"]
+                        break
+                    elif f["severity"] == "WARN" and severity != "CRITICAL":
+                        severity = "WARN"
+                        reason = f["reason"]
+
+                # ÐŸÐ¾Ð´ÑÑ‡Ñ‘Ñ‚ ÑÑ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ¸
+                if severity == "CRITICAL":
+                    total_critical += 1
+                elif severity == "WARN":
+                    total_warn += 1
+                else:
+                    total_info += 1
+
+                # Ð”Ð¾Ð±Ð°Ð²Ð»ÑÐµÐ¼ Ð² ÑÐ¿Ð¸ÑÐ¾Ðº Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÐµÑÐ»Ð¸ ÐµÑÑ‚ÑŒ Ñ€Ð¸ÑÐº Ð¸Ð»Ð¸ Ð¿Ñ€Ð¾Ñ†ÐµÑÑ Ð¾Ñ‡ÐµÐ½ÑŒ Ð°ÐºÑ‚Ð¸Ð²Ð½Ñ‹Ð¹
+                if severity != "INFO" or data["connections"] > 10:
+                    has_risk = True
+                    ip_str = remote_ip if remote_ip else "N/A"
+                    conn_list.append(f"  â€¢ {ip_str:<18} â†’ {severity:8}  {reason}")
+
+            if has_risk or data["connections"] >= 5:
+                color = "\033[91m" if total_critical > 0 else "\033[93m" if total_warn > 0 else "\033[92m"
+                reset = "\033[0m"
+                print(f"\n{color}{name}{reset}  ({data['connections']} connections)")
+
+                if conn_list:
+                    for line in conn_list:
+                        print(line)
+                else:
+                    print("  â€¢ All connections NORMAL")
+
+                risky_found = True
+
+        if not risky_found:
+            print("\nNo risky connections detected at the moment.")
+            print("All active processes look clean.")
+
+        print("\n" + "-" * 90)
+        print(f"TOTAL RISK COUNT â†’ CRITICAL: {total_critical} | WARN: {total_warn} | INFO: {total_info}")
+        print("=" * 90)
+
+    def show_stats(self):
+        stats = self.alert_manager.get_alert_stats()
+        print("\n" + "=" * 60)
+        print(" ALERT STATISTICS")
+        print("=" * 60)
+        print(f"Last hour : INFO={stats['last_hour'].get('INFO',0)}  WARN={stats['last_hour'].get('WARN',0)}  CRITICAL={stats['last_hour'].get('CRITICAL',0)}")
+        print(f"Last day  : INFO={stats['last_day'].get('INFO',0)}  WARN={stats['last_day'].get('WARN',0)}  CRITICAL={stats['last_day'].get('CRITICAL',0)}")
+        print("=" * 60)
 
     def show_status(self):
         print("\n" + "=" * 80)
@@ -159,7 +291,11 @@ class MonitorApp:
             print("No active external connections found.")
             return
 
-        sorted_stats = sorted(proc_stats.items(), key=lambda item: item[1]["connections"], reverse=True)
+        sorted_stats = sorted(
+            proc_stats.items(),
+            key=lambda item: item[1]["connections"],
+            reverse=True,
+        )
 
         for (pid, name), data in sorted_stats:
             ext_conn = data["connections"]
@@ -177,6 +313,32 @@ class MonitorApp:
         processes = self.collector.collect_network_data()
         print(f"Total processes with network activity: {len(processes)}")
 
+    def hardware_info(self):
+        print("\n" + "=" * 80)
+        print(f" HARDWARE INFO at {time.strftime('%H:%M:%S')}")
+        print("=" * 80)
+        print(metrics.get_hardware_info())
+
+    def cpu_temps(self):
+        print("\n" + "=" * 80)
+        print(f" CPU TEMPERATURES at {time.strftime('%H:%M:%S')}")
+        print("=" * 80)
+        temps = metrics.get_hardware_info().get("temperatures", {})
+        self._print_temps_info(temps)
+
+    def _print_hwinfo(self, hw):
+        print("\n" + "=" * 80)
+        print(f" HARDWARE INFO at {time.strftime('%H:%M:%S')}")
+        print("=" * 80)
+        self._print_system_info(hw["system"])
+        self._print_cpu_info(hw["cpu"])
+        self._print_memory_info(hw["ram"], hw["swap"])
+        self._print_disk_info(hw["disk"])
+        self._print_network_info(hw["network"])
+        self._print_gpu_info(hw["gpu"])
+        self._print_temps_info(hw["temperatures"])
+        print("=" * 80)
+
     def _print_hwinfo(self, hw):
         system = hw.get("system", {})
         cpu = hw.get("cpu", {})
@@ -191,17 +353,7 @@ class MonitorApp:
         print(f" HARDWARE INFO at {time.strftime('%H:%M:%S')}")
         print("=" * 80)
 
-        self._print_system_info(system)
-        self._print_cpu_info(cpu)
-        self._print_memory_info(ram, swap)
-        self._print_disk_info(disk)
-        self._print_network_info(network)
-        self._print_gpu_info(gpu)
-        self._print_temps_info(temps)
-
-        print("=" * 80)
-
-    def _print_system_info(self, system):
+        # System
         print("SYSTEM")
         print(f"  OS           : {system.get('os', 'N/A')} {system.get('os_release', '')}")
         print(f"  Hostname     : {system.get('hostname', 'N/A')}")
@@ -210,7 +362,7 @@ class MonitorApp:
         print(f"  Uptime (sec) : {system.get('uptime_sec', 'N/A')}")
         print("-" * 80)
 
-    def _print_cpu_info(self, cpu):
+        # CPU
         freq = cpu.get("frequency_mhz", {})
         print("CPU")
         print(f"  Cores        : {cpu.get('physical_cores', 'N/A')} physical / {cpu.get('logical_cores', 'N/A')} logical")
@@ -224,14 +376,14 @@ class MonitorApp:
             print("  Per-core     : " + ", ".join(f"{v:.1f}%" for v in per_core))
         print("-" * 80)
 
-    def _print_memory_info(self, ram, swap):
+        # Memory
         print("MEMORY")
         print(f"  RAM          : {ram.get('used_mb', 'N/A')} / {ram.get('total_mb', 'N/A')} MB ({ram.get('percent', 'N/A')}%)")
         print(f"  RAM Avail    : {ram.get('available_mb', 'N/A')} MB")
         print(f"  SWAP         : {swap.get('used_mb', 'N/A')} / {swap.get('total_mb', 'N/A')} MB ({swap.get('percent', 'N/A')}%)")
         print("-" * 80)
 
-    def _print_disk_info(self, disk):
+        # Disk
         print("DISK")
         parts = disk.get("partitions", [])
         if parts:
@@ -244,7 +396,7 @@ class MonitorApp:
             print("  N/A")
         print("-" * 80)
 
-    def _print_network_info(self, network):
+        # Network
         print("NETWORK")
         io_total = network.get("io_total", {})
         if io_total:
@@ -256,7 +408,7 @@ class MonitorApp:
             print("  N/A")
         print("-" * 80)
 
-    def _print_gpu_info(self, gpu):
+        # GPU
         print("GPU")
         devices = gpu.get("devices", [])
         if devices:
@@ -270,12 +422,27 @@ class MonitorApp:
             print("  N/A")
         print("-" * 80)
 
-    def _print_temps_info(self, temps):
+        # Temperatures
         print("TEMPERATURES")
         print(f"  CPU Temp     : {temps.get('cpu_temp_c', 'N/A')}")
         print(f"  GPU Temp     : {temps.get('gpu_temp_c', 'N/A')}")
         print(f"  Source       : {temps.get('source', 'N/A')}")
-        print("-" * 80)
+        print("=" * 80)
+
+    def _print_temps_info(self, temps):
+        """Compact temperatures output for `temps` command."""
+        cpu_temp = temps.get("cpu_temp_c", None)
+        gpu_temp = temps.get("gpu_temp_c", None)
+        source = temps.get("source", "none")
+
+        print("\n" + "=" * 80)
+        print(f" TEMPERATURES at {time.strftime('%H:%M:%S')}")
+        print("=" * 80)
+        print(f"CPU Temp  : {cpu_temp if cpu_temp is not None else 'N/A'}")
+        print(f"GPU Temp  : {gpu_temp if gpu_temp is not None else 'N/A'}")
+        print(f"Source    : {source}")
+        print("=" * 80)
+
 
     def top(self, limit=15, with_header=True):
         if with_header:
@@ -308,16 +475,178 @@ class MonitorApp:
 
         if alerts:
             for alert in alerts:
-                print(f"  {alert}")
+                if isinstance(alert, dict):
+                    event_time = time.strftime("%H:%M:%S", time.localtime(alert["ts"]))
+
+                    proc = alert.get("process", "N/A")
+                    pid = alert.get("pid")
+                    ip = alert.get("remote_ip")
+                    port = alert.get("remote_port")
+
+                    extra = []
+                    if pid is not None:
+                        extra.append(f"pid={pid}")
+                    if ip:
+                        extra.append(f"ip={ip}")
+                    if port:
+                        extra.append(f"port={port}")
+                    extra_str = f" ({', '.join(extra)})" if extra else ""
+
+                    print(
+                        f"[{alert.get('severity','INFO')}] "
+                        f"[{event_time}] "
+                        f"{alert.get('type','event')} -> {proc}{extra_str} | "
+                        f"{alert.get('reason','')}"
+                    )
+                else:
+                    print(f"  {alert}")
         else:
             print("  No alerts right now.")
         print("=" * 65)
+
+    def alerts_watch(self, interval=2):
+        """Realtime alerts watcher. Stop with Ctrl+C."""
+        try:
+            sec = float(interval)
+            if sec <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            print("Usage: alertswatch [seconds], where seconds > 0 (example: alertswatch 2)")
+            return
+
+        print("\n" + "=" * 80)
+        print(f" ALERT WATCH started at {time.strftime('%H:%M:%S')} (interval={sec}s)")
+        print(" Press Ctrl+C to stop.")
+        print("=" * 80)
+
+        errors_in_row = 0
+        last_idle_print = 0.0
+
+        try:
+            while True:
+                try:
+                    processes = self.collector.collect_network_data()
+                    alerts = self.alert_manager.check_anomalies(processes)
+                    errors_in_row = 0
+                except Exception as exc:
+                    errors_in_row += 1
+                    print(
+                        f"[WARN] [{time.strftime('%H:%M:%S')}] watch_cycle_error "
+                        f"-> collector | {type(exc).__name__}: {exc}"
+                    )
+                    # Small backoff on repeated runtime errors.
+                    time.sleep(min(sec * max(errors_in_row, 1), 5.0))
+                    continue
+
+                for alert in alerts:
+                    if not isinstance(alert, dict):
+                        print(f"  {alert}")
+                        continue
+
+                    event_time = time.strftime("%H:%M:%S", time.localtime(alert["ts"]))
+                    proc = alert.get("process", "N/A")
+                    pid = alert.get("pid")
+                    ip = alert.get("remote_ip")
+                    port = alert.get("remote_port")
+                    extra = []
+                    if pid is not None:
+                        extra.append(f"pid={pid}")
+                    if ip:
+                        extra.append(f"ip={ip}")
+                    if port:
+                        extra.append(f"port={port}")
+                    extra_str = f" ({', '.join(extra)})" if extra else ""
+
+                    print(
+                        f"[{alert.get('severity','INFO')}] "
+                        f"[{event_time}] "
+                        f"{alert.get('type','event')} -> {proc}{extra_str} | "
+                        f"{alert.get('reason','')}"
+                    )
+
+                # Keep watch mode "alive" even when no new alerts.
+                if not alerts:
+                    now = time.time()
+                    if (now - last_idle_print) >= max(sec * 5, 5):
+                        print(f"[INFO] [{time.strftime('%H:%M:%S')}] no_new_alerts")
+                        last_idle_print = now
+
+                time.sleep(sec)
+        except KeyboardInterrupt:
+            print("\nALERT WATCH stopped.")
 
     def show_ignore_list(self):
         ignored = self.ignore_list.get_all()
         print(f"Ignored processes ({len(ignored)}):")
         for p in ignored:
             print(f"  - {p}")
+
+    def show_alerts_log(self, limit=20):
+        """Show last N alerts from JSONL log."""
+        try:
+            n = int(limit)
+            if n <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            print("Usage: alertslog [N], where N is a positive number.")
+            return
+
+        log_path = os.path.join("logs", "alerts.jsonl")
+        if not os.path.exists(log_path):
+            print("No alert log file yet.")
+            return
+
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f if ln.strip()]
+        except Exception as exc:
+            print(f"Failed to read alert log: {exc}")
+            return
+
+        if not lines:
+            print("Alert log is empty.")
+            return
+
+        print("\n" + "=" * 100)
+        print(f" ALERT LOG (last {n}) at {time.strftime('%H:%M:%S')}")
+        print("=" * 100)
+
+        shown = 0
+        for row in lines[-n:]:
+            try:
+                alert = json.loads(row)
+            except Exception:
+                continue
+
+            ts = alert.get("ts")
+            if isinstance(ts, (int, float)):
+                event_time = time.strftime("%H:%M:%S", time.localtime(ts))
+            else:
+                event_time = "N/A"
+
+            proc = alert.get("process", "N/A")
+            sev = alert.get("severity", "INFO")
+            typ = alert.get("type", "event")
+            reason = alert.get("reason", "")
+
+            pid = alert.get("pid")
+            ip = alert.get("remote_ip")
+            port = alert.get("remote_port")
+            extra = []
+            if pid is not None:
+                extra.append(f"pid={pid}")
+            if ip:
+                extra.append(f"ip={ip}")
+            if port:
+                extra.append(f"port={port}")
+            extra_str = f" ({', '.join(extra)})" if extra else ""
+
+            print(f"[{sev}] [{event_time}] {typ} -> {proc}{extra_str} | {reason}")
+            shown += 1
+
+        if shown == 0:
+            print("No valid JSON entries found in alert log.")
+        print("=" * 100)
 
     def add_ignore(self, value):
         """Add ignored process by name or by number from last TOP output."""
@@ -353,11 +682,38 @@ class MonitorApp:
         gui = MainWindow(self)
         gui.create_window()
 
-    def process_info(self, name_or_pid):
-        """Show detailed info for specific process by name or PID"""
+    def permissions_diag(self):
         print("\n" + "=" * 80)
-        print(f" PROCESS INFO for '{name_or_pid}' at {time.strftime('%H:%M:%S')}")
+        print(f" PERMISSIONS DIAG at {time.strftime('%H:%M:%S')}")
         print("=" * 80)
+
+        try:
+            import ctypes
+            is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            is_admin = False
+
+        conns = psutil.net_connections(kind="inet")
+        total = len(conns)
+        no_pid = sum(1 for c in conns if c.pid is None)
+        with_pid = total - no_pid
+        external_total = sum(1 for c in conns if c.raddr)
+        external_with_pid = sum(1 for c in conns if c.raddr and c.pid is not None)
+
+        print(f"Admin mode           : {is_admin}")
+        print(f"Total inet sockets   : {total}")
+        print(f"With PID             : {with_pid}")
+        print(f"Without PID          : {no_pid}")
+        print(f"External sockets     : {external_total}")
+        print(f"External with PID    : {external_with_pid}")
+        print("=" * 80)
+
+
+    def process_info(self, name_or_pid):
+        """Show detailed info for specific process by name or PID + risk flags"""
+        print("\n" + "=" * 100)
+        print(f" PROCESS INFO + RISK ANALYSIS for '{name_or_pid}' at {time.strftime('%H:%M:%S')}")
+        print("=" * 100)
 
         query = str(name_or_pid).strip()
         is_pid_query = query.isdigit()
@@ -370,8 +726,11 @@ class MonitorApp:
         protocols = {"TCP": 0, "UDP": 0}
         states = {}
         unique_ips = set()
+        risk_summary = defaultdict(list)   # NEW: Ð´Ð»Ñ ÐºÑ€Ð°ÑÐ¸Ð²Ð¾Ð³Ð¾ summary Ñ€Ð¸ÑÐºÐ¾Ð²
 
-        for c in psutil.net_connections(kind="inet"):
+        from core.threat_engine import threat_engine
+
+        for c in psutil.net_connections(kind="inet4"):   # Ð»ÑƒÑ‡ÑˆÐµ inet4 Ñ‡ÐµÐ¼ inet
             if c.pid is None:
                 continue
 
@@ -387,23 +746,35 @@ class MonitorApp:
                 if pname.lower() != target_name:
                     continue
 
+            remote_ip = getattr(c.raddr, "ip", None) if c.raddr else None
+            remote_port = getattr(c.raddr, "port", None) if c.raddr else None
+
+            # === RISK ANALYSIS ===
+            flags = threat_engine.analyze_connection(pname, remote_ip, remote_port)
+
             proto = "TCP" if c.type == socket.SOCK_STREAM else "UDP"
             state = c.status or "-"
             local = f"{c.laddr.ip}:{c.laddr.port}" if c.laddr else "-"
-            remote = f"{c.raddr.ip}:{c.raddr.port}" if c.raddr else "-"
+            remote = f"{remote_ip}:{remote_port}" if remote_ip else "-"
 
-            matched_rows.append((c.pid, pname, proto, state, local, remote))
+            matched_rows.append((c.pid, pname, proto, state, local, remote, flags))
+
             matched_pids.add(c.pid)
             matched_names.add(pname)
             protocols[proto] += 1
             states[state] = states.get(state, 0) + 1
-            if c.raddr and getattr(c.raddr, "ip", None):
-                unique_ips.add(c.raddr.ip)
+            if remote_ip:
+                unique_ips.add(remote_ip)
+
+            # summarize risk reasons by severity for summary section
+            for f in flags:
+                risk_summary[f["severity"]].append(f["reason"])
 
         if not matched_rows:
             print("Process not found or has no inet connections.")
             return
 
+        # === BASIC INFO ===
         print(f"Name(s)      : {', '.join(sorted(matched_names))}")
         print(f"PID(s)       : {', '.join(str(p) for p in sorted(matched_pids))}")
         print(f"Connections  : {len(matched_rows)}")
@@ -412,12 +783,29 @@ class MonitorApp:
         print("States       : " + ", ".join(f"{k}={v}" for k, v in sorted(states.items())))
 
         print("-" * 100)
-        print(f"{'PID':<8} {'Proto':<6} {'State':<13} {'Local':<30} {'Remote':<30}")
+
+        # === RISK FLAGS SUMMARY ===
+        print("RISK FLAGS SUMMARY:")
+        for severity in ["CRITICAL", "WARN", "INFO"]:
+            if severity in risk_summary:
+                reasons = sorted(set(risk_summary[severity]))   # ÑƒÐ½Ð¸ÐºÐ°Ð»ÑŒÐ½Ñ‹Ðµ
+                color = "\033[91m" if severity == "CRITICAL" else "\033[93m" if severity == "WARN" else "\033[92m"
+                reset = "\033[0m"
+                print(f"  {color}{severity:8} â†’ {', '.join(reasons)}{reset}")
+
         print("-" * 100)
 
+        # === DETAILED TABLE ===
+        print(f"{'PID':<8} {'Proto':<6} {'State':<13} {'Local':<30} {'Remote':<35} {'Risk Flags'}")
+        print("-" * 120)
+
         matched_rows.sort(key=lambda row: (row[0], row[2], row[3], row[4], row[5]))
-        for pid, pname, proto, state, local, remote in matched_rows:
-            print(f"{pid:<8} {proto:<6} {state:<13} {local:<30} {remote:<30}")
+
+        for pid, pname, proto, state, local, remote, flags in matched_rows:
+            risk_str = " | ".join([f["reason"] for f in flags])
+            print(f"{pid:<8} {proto:<6} {state:<13} {local:<30} {remote:<35} {risk_str}")
+
+        print("=" * 100)
 
     def show_help(self):
         """Show help message with available commands"""
@@ -427,16 +815,17 @@ class MonitorApp:
         print("  status                     show system metrics + top list")
         print("  top                        show top processes")
         print("  network processes          show external connections summary")
+        print("  threats info               show current threat database and whitelist")
+        print("  risks                      show global risk summary for all active connections")
+        print("  stats                      show alert statistics")
         print("  processinfo <name.exe>     show connections for process name")
         print("  pidinfo <pid>              show connections for exact PID")
-        print("  hwinfo                     show full hardware overview")
-        print("  cpuinfo                    show CPU info")
-        print("  raminfo                    show RAM/SWAP info")
-        print("  diskinfo                   show disk info")
-        print("  netinfo                    show network info")
-        print("  gpuinfo                    show GPU info")
-        print("  temps                      show temperatures info")
+        print("  threads                    show threads count for top processes")
+        print("  temps                      show CPU temperature (if available)")
+        print("  hwinfo                     show hardware information")
         print("  alerts                     run anomaly check now")
+        print("  alertswatch [sec]          realtime alerts stream (Ctrl+C to stop)")
+        print("  alertslog [N]              show last N alerts from log file")
         print("  list | ignore              show ignore list")
         print("  add <name|number>          add ignore by process name or top index")
         print("  remove <name>              remove ignore by process name")

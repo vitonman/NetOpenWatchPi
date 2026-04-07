@@ -21,6 +21,7 @@ class NetworkCollector:
             "connections": 0,
             "unique_ips": set(),
             "remote_ports": set(),
+            "remote_endpoints": set(),
             "protocols": {"TCP": 0, "UDP": 0},
             "states": defaultdict(int),
             "pid": None
@@ -44,6 +45,8 @@ class NetworkCollector:
                     data["unique_ips"].add(conn.raddr.ip)
                 if conn.raddr.port:
                     data["remote_ports"].add(conn.raddr.port)
+                if conn.raddr.ip and conn.raddr.port:
+                    data["remote_endpoints"].add((conn.raddr.ip, conn.raddr.port))
 
             proto = "TCP" if "tcp" in str(conn.type).lower() else "UDP"
             data["protocols"][proto] += 1
