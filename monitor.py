@@ -59,7 +59,7 @@ class MonitorApp:
                     self.top()
                 elif cmd == "network processes":
                     self.network_processes_list()
-                elif cmd == "threats":
+                elif cmd in ["threats", "threats info"]:
                     self.show_threats()
                 elif cmd == "stats":
                     self.show_stats()
@@ -115,33 +115,32 @@ class MonitorApp:
 
     def show_threats(self):
         from core.threat_engine import threat_engine
-        
+
         print("\n" + "=" * 80)
         print(f" THREAT DATABASE & WHITELIST at {time.strftime('%H:%M:%S')}")
         print("=" * 80)
 
         print("MALICIOUS IPs:")
         for ip in threat_engine.threats.get("malicious_ips", []):
-            print(f"  â€¢ {ip}")
+            print(f"  - {ip}")
 
         print("\nSUSPICIOUS PORTS:")
         print("  " + ", ".join(map(str, threat_engine.threats.get("suspicious_ports", []))))
 
         print("\nKNOWN MALWARE PROCESSES:")
         for p in threat_engine.threats.get("known_malware_processes", []):
-            print(f"  â€¢ {p}")
+            print(f"  - {p}")
 
         print("\nWHITELIST - TRUSTED PROCESSES:")
         for p in threat_engine.whitelist.get("trusted_processes", []):
-            print(f"  â€¢ {p}")
+            print(f"  - {p}")
 
         print("\nWHITELIST - TRUSTED IPs:")
         for ip in threat_engine.whitelist.get("trusted_ips", []):
-            print(f"  â€¢ {ip}")
+            print(f"  - {ip}")
         print("=" * 80)
 
         print()
-
     def show_risks(self):
         """Show global risk summary for all active network processes"""
         from core.threat_engine import threat_engine
@@ -181,14 +180,12 @@ class MonitorApp:
                 remote_ip = getattr(conn.raddr, "ip", None) if conn.raddr else None
                 remote_port = getattr(conn.raddr, "port", None) if conn.raddr else None
 
-                # ÐŸÑ€Ð¾Ð¿ÑƒÑÐºÐ°ÐµÐ¼ Ð´ÑƒÐ±Ð»Ð¸ÐºÐ°Ñ‚Ñ‹ Ð¾Ð´Ð½Ð¾Ð³Ð¾ Ð¸ Ñ‚Ð¾Ð³Ð¾ Ð¶Ðµ IP
                 if remote_ip is None or (name, remote_ip) in seen:
                     continue
                 seen.add((name, remote_ip))
 
                 flags = threat_engine.analyze_connection(name, remote_ip, remote_port)
 
-                # ÐžÐ¿Ñ€ÐµÐ´ÐµÐ»ÑÐµÐ¼ ÑÐ°Ð¼Ñ‹Ð¹ Ð²Ñ‹ÑÐ¾ÐºÐ¸Ð¹ ÑƒÑ€Ð¾Ð²ÐµÐ½ÑŒ ÑƒÐ³Ñ€Ð¾Ð·Ñ‹
                 severity = "INFO"
                 reason = "NORMAL"
                 for f in flags:
@@ -200,7 +197,6 @@ class MonitorApp:
                         severity = "WARN"
                         reason = f["reason"]
 
-                # ÐŸÐ¾Ð´ÑÑ‡Ñ‘Ñ‚ ÑÑ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ¸
                 if severity == "CRITICAL":
                     total_critical += 1
                 elif severity == "WARN":
@@ -208,11 +204,10 @@ class MonitorApp:
                 else:
                     total_info += 1
 
-                # Ð”Ð¾Ð±Ð°Ð²Ð»ÑÐµÐ¼ Ð² ÑÐ¿Ð¸ÑÐ¾Ðº Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÐµÑÐ»Ð¸ ÐµÑÑ‚ÑŒ Ñ€Ð¸ÑÐº Ð¸Ð»Ð¸ Ð¿Ñ€Ð¾Ñ†ÐµÑÑ Ð¾Ñ‡ÐµÐ½ÑŒ Ð°ÐºÑ‚Ð¸Ð²Ð½Ñ‹Ð¹
                 if severity != "INFO" or data["connections"] > 10:
                     has_risk = True
                     ip_str = remote_ip if remote_ip else "N/A"
-                    conn_list.append(f"  â€¢ {ip_str:<18} â†’ {severity:8}  {reason}")
+                    conn_list.append(f"  - {ip_str:<18} -> {severity:8}  {reason}")
 
             if has_risk or data["connections"] >= 5:
                 color = "\033[91m" if total_critical > 0 else "\033[93m" if total_warn > 0 else "\033[92m"
@@ -223,7 +218,7 @@ class MonitorApp:
                     for line in conn_list:
                         print(line)
                 else:
-                    print("  â€¢ All connections NORMAL")
+                    print("  - All connections NORMAL")
 
                 risky_found = True
 
@@ -232,7 +227,7 @@ class MonitorApp:
             print("All active processes look clean.")
 
         print("\n" + "-" * 90)
-        print(f"TOTAL RISK COUNT â†’ CRITICAL: {total_critical} | WARN: {total_warn} | INFO: {total_info}")
+        print(f"TOTAL RISK COUNT -> CRITICAL: {total_critical} | WARN: {total_warn} | INFO: {total_info}")
         print("=" * 90)
 
     def show_stats(self):
@@ -325,19 +320,6 @@ class MonitorApp:
         print("=" * 80)
         temps = metrics.get_hardware_info().get("temperatures", {})
         self._print_temps_info(temps)
-
-    def _print_hwinfo(self, hw):
-        print("\n" + "=" * 80)
-        print(f" HARDWARE INFO at {time.strftime('%H:%M:%S')}")
-        print("=" * 80)
-        self._print_system_info(hw["system"])
-        self._print_cpu_info(hw["cpu"])
-        self._print_memory_info(hw["ram"], hw["swap"])
-        self._print_disk_info(hw["disk"])
-        self._print_network_info(hw["network"])
-        self._print_gpu_info(hw["gpu"])
-        self._print_temps_info(hw["temperatures"])
-        print("=" * 80)
 
     def _print_hwinfo(self, hw):
         system = hw.get("system", {})
@@ -726,11 +708,11 @@ class MonitorApp:
         protocols = {"TCP": 0, "UDP": 0}
         states = {}
         unique_ips = set()
-        risk_summary = defaultdict(list)   # NEW: Ð´Ð»Ñ ÐºÑ€Ð°ÑÐ¸Ð²Ð¾Ð³Ð¾ summary Ñ€Ð¸ÑÐºÐ¾Ð²
+        risk_summary = defaultdict(list)
 
         from core.threat_engine import threat_engine
 
-        for c in psutil.net_connections(kind="inet4"):   # Ð»ÑƒÑ‡ÑˆÐµ inet4 Ñ‡ÐµÐ¼ inet
+        for c in psutil.net_connections(kind="inet4"):
             if c.pid is None:
                 continue
 
@@ -788,10 +770,10 @@ class MonitorApp:
         print("RISK FLAGS SUMMARY:")
         for severity in ["CRITICAL", "WARN", "INFO"]:
             if severity in risk_summary:
-                reasons = sorted(set(risk_summary[severity]))   # ÑƒÐ½Ð¸ÐºÐ°Ð»ÑŒÐ½Ñ‹Ðµ
+                reasons = sorted(set(risk_summary[severity]))
                 color = "\033[91m" if severity == "CRITICAL" else "\033[93m" if severity == "WARN" else "\033[92m"
                 reset = "\033[0m"
-                print(f"  {color}{severity:8} â†’ {', '.join(reasons)}{reset}")
+                print(f"  {color}{severity:8} -> {', '.join(reasons)}{reset}")
 
         print("-" * 100)
 
@@ -815,12 +797,11 @@ class MonitorApp:
         print("  status                     show system metrics + top list")
         print("  top                        show top processes")
         print("  network processes          show external connections summary")
-        print("  threats info               show current threat database and whitelist")
+        print("  threats                    show current threat database and whitelist")
         print("  risks                      show global risk summary for all active connections")
         print("  stats                      show alert statistics")
         print("  processinfo <name.exe>     show connections for process name")
         print("  pidinfo <pid>              show connections for exact PID")
-        print("  threads                    show threads count for top processes")
         print("  temps                      show CPU temperature (if available)")
         print("  hwinfo                     show hardware information")
         print("  alerts                     run anomaly check now")
@@ -830,6 +811,7 @@ class MonitorApp:
         print("  add <name|number>          add ignore by process name or top index")
         print("  remove <name>              remove ignore by process name")
         print("  gui                        open GUI window")
+        print("  permdiag                   show socket/permissions diagnostics")
         print("  clear                      clear terminal")
         print("  help                       show this help message")
         print("  quit                       exit program")
