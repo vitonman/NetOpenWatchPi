@@ -1,0 +1,200 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=640, height=480, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>NetOpenWatchPi - PC Overview</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --bg:#07120a;
+      --panel:#0a1b0f;
+      --line:#173d22;
+      --text:#99ff9f;
+      --dim:#56b35f;
+      --warn:#ffd34d;
+      --bad:#ff5f5f;
+    }
+
+    *{ box-sizing:border-box; }
+
+    html,body{
+      margin:0;
+      width:640px;
+      height:480px;
+      overflow:hidden;
+      background:var(--bg);
+      color:var(--text);
+      font-family:"VT323","Consolas","Courier New",monospace;
+      letter-spacing:.3px;
+    }
+
+    .safe{ width:100%; height:100%; padding:12px; }
+
+    .screen{
+      position:relative;
+      width:100%;
+      height:100%;
+      border:2px solid var(--line);
+      box-shadow: inset 0 0 40px rgba(80,255,120,.08);
+      background: radial-gradient(circle at center, #0a1d10 0%, #061009 100%);
+      padding:10px;
+    }
+
+    .scanlines::before{
+      content:"";
+      position:absolute;
+      inset:0;
+      pointer-events:none;
+      background:repeating-linear-gradient(
+        to bottom,
+        rgba(0,0,0,0) 0px,
+        rgba(0,0,0,0) 2px,
+        rgba(0,0,0,.18) 3px
+      );
+      mix-blend-mode:multiply;
+    }
+
+    .top{
+      height:38px;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      border:1px solid var(--line);
+      padding:0 8px;
+      color:var(--dim);
+      font-size:24px;
+    }
+
+    .grid{
+      margin-top:8px;
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:8px;
+      height:335px;
+    }
+
+    .card{ border:1px solid var(--line); background:var(--panel); padding:8px; }
+
+    .k{ color:var(--dim); font-size:20px; }
+    .v{ margin-top:6px; font-size:42px; line-height:1; text-shadow:0 0 8px rgba(120,255,140,.25); }
+    .small{ margin-top:4px; font-size:20px; color:var(--dim); }
+
+    .ok{ color:var(--text); }
+    .warn{ color:var(--warn); }
+    .bad{ color:var(--bad); }
+
+    .footer{
+      margin-top:8px;
+      height:38px;
+      border:1px solid var(--line);
+      display:flex;
+      align-items:center;
+      justify-content:space-around;
+      color:var(--dim);
+      font-size:20px;
+    }
+
+    .tab{ border:1px solid var(--line); padding:2px 8px; }
+    .active{ color:var(--text); border-color:var(--text); }
+    a{ color:inherit; text-decoration:none; }
+
+    #gpu{ font-size:24px; line-height:1.1; word-break:break-word; }
+  </style>
+</head>
+<body>
+  <div class="safe">
+    <div class="screen scanlines">
+      <div class="top">
+        <div id="host">HOST</div>
+        <div id="clock">--:--:--</div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <div class="k">CPU</div>
+          <div id="cpu" class="v">--</div>
+          <div id="cpu_temp" class="small">TEMP --</div>
+        </div>
+
+        <div class="card">
+          <div class="k">RAM</div>
+          <div id="ram" class="v">--</div>
+          <div id="ram_mb" class="small">-- / -- MB</div>
+        </div>
+
+        <div class="card">
+          <div class="k">NETWORK</div>
+          <div id="net_rx" class="v">RX --</div>
+          <div id="net_tx" class="small">TX --</div>
+        </div>
+
+        <div class="card">
+          <div class="k">GPU</div>
+          <div id="gpu" class="v">--</div>
+          <div id="gpu_temp" class="small">TEMP --</div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <a class="tab" href="index.html">F1 CLOCK</a>
+        <div class="tab active">F2 PC OVERVIEW</div>
+        <a class="tab" href="alerts.html">F3 ALERTS</a>
+        <a class="tab" href="processes.html">F4 PROCESSES</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = "http://192.168.0.54:8765";
+
+    function sevClass(p){
+      if (p == null) return "ok";
+      if (p >= 85) return "bad";
+      if (p >= 65) return "warn";
+      return "ok";
+    }
+
+    function mb(n){
+      if (n == null) return "--";
+      return `${Math.round(n/1024/1024)} MB`;
+    }
+
+    async function tick(){
+      document.getElementById("clock").textContent = new Date().toLocaleTimeString();
+      try{
+        const r = await fetch(`${API}/api/status`, { cache:"no-store" });
+        const j = await r.json();
+
+        document.getElementById("host").textContent = `${j.system?.hostname || "HOST"} | ${j.system?.os || ""}`;
+
+        const cpu = j.metrics?.cpu_percent;
+        const ram = j.metrics?.ram_percent;
+        document.getElementById("cpu").className = `v ${sevClass(cpu)}`;
+        document.getElementById("ram").className = `v ${sevClass(ram)}`;
+
+        document.getElementById("cpu").textContent = cpu == null ? "--" : `${cpu.toFixed(1)}%`;
+        document.getElementById("ram").textContent = ram == null ? "--" : `${ram.toFixed(1)}%`;
+
+        document.getElementById("cpu_temp").textContent = `TEMP ${j.metrics?.cpu_temp_c ?? "--"} C`;
+        document.getElementById("ram_mb").textContent = `${j.metrics?.ram_used_mb ?? "--"} / ${j.metrics?.ram_total_mb ?? "--"} MB`;
+
+        document.getElementById("net_rx").textContent = `RX ${mb(j.network?.bytes_recv)}`;
+        document.getElementById("net_tx").textContent = `TX ${mb(j.network?.bytes_sent)}`;
+
+        document.getElementById("gpu").textContent = j.gpu?.name || "N/A";
+        document.getElementById("gpu_temp").textContent = `TEMP ${j.metrics?.gpu_temp_c ?? "--"} C`;
+      } catch(e){
+        document.getElementById("host").textContent = "HOST OFFLINE";
+      }
+    }
+
+    tick();
+    setInterval(tick, 2000);
+  </script>
+</body>
+</html>
