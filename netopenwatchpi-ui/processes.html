@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=640, height=480, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>NetOpenWatchPi - Processes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#07120a;--panel:#0a1b0f;--line:#173d22;--text:#99ff9f;--dim:#56b35f;--warn:#ffd34d;--bad:#ff5f5f;}
+    *{box-sizing:border-box}
+    html,body{margin:0;width:640px;height:480px;overflow:hidden;background:var(--bg);color:var(--text);font-family:"VT323","Consolas",monospace}
+    .safe{width:100%;height:100%;padding:12px}
+    .screen{position:relative;width:100%;height:100%;border:2px solid var(--line);background:radial-gradient(circle at center,#0a1d10 0%,#061009 100%);padding:10px}
+    .screen::before{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.18) 3px)}
+    .top{height:38px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 8px;color:var(--dim);font-size:24px}
+    .list{margin-top:8px;height:335px;border:1px solid var(--line);background:var(--panel);padding:6px;overflow:hidden}
+    .row{font-size:20px;line-height:1.2;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .warn{color:var(--warn)} .bad{color:var(--bad)}
+    .footer{margin-top:8px;height:38px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-around;color:var(--dim);font-size:20px}
+    .tab{border:1px solid var(--line);padding:2px 8px}
+    .active{color:var(--text);border-color:var(--text)}
+    a{color:inherit;text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="safe">
+    <div class="screen">
+      <div class="top">
+        <div id="host">PROCESSES</div>
+        <div id="clock">--:--:--</div>
+      </div>
+
+      <div class="list" id="list"></div>
+
+      <div class="footer">
+        <a class="tab" href="index.html">F1 OVERVIEW</a>
+        <a class="tab" href="alerts.html">F2 ALERTS</a>
+        <div class="tab active">F3 PROCESSES</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = "http://192.168.0.54:8765";
+
+    function sev(conn){
+      if(conn >= 30) return "bad";
+      if(conn >= 15) return "warn";
+      return "";
+    }
+
+    async function tick(){
+      document.getElementById("clock").textContent = new Date().toLocaleTimeString();
+      try{
+        const r = await fetch(`${API}/api/processes`, {cache:"no-store"});
+        const j = await r.json();
+        const items = (j.items || []).slice(0, 14); // fit 640x480
+        const list = document.getElementById("list");
+
+        if(!items.length){
+          list.innerHTML = `<div class="row">No active processes.</div>`;
+          return;
+        }
+
+        list.innerHTML = items.map(p=>{
+          const cls = sev(p.connections || 0);
+          const pid = p.pid ?? "N/A";
+          const c = p.connections ?? 0;
+          const ips = p.unique_ips ?? 0;
+          return `<div class="row ${cls}">[${pid}] ${p.name} | conn=${c} | ips=${ips}</div>`;
+        }).join("");
+      }catch(e){
+        document.getElementById("list").innerHTML = `<div class="row bad">HOST OFFLINE</div>`;
+      }
+    }
+
+    tick();
+    setInterval(tick, 2000);
+  </script>
+</body>
+</html>
+

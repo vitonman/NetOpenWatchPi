@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=640, height=480, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>NetOpenWatchPi - Alerts</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#07120a;--panel:#0a1b0f;--line:#173d22;--text:#99ff9f;--dim:#56b35f;--warn:#ffd34d;--bad:#ff5f5f;}
+    *{box-sizing:border-box}
+    html,body{margin:0;width:640px;height:480px;overflow:hidden;background:var(--bg);color:var(--text);font-family:"VT323","Consolas",monospace}
+    .safe{width:100%;height:100%;padding:12px}
+    .screen{position:relative;width:100%;height:100%;border:2px solid var(--line);background:radial-gradient(circle at center,#0a1d10 0%,#061009 100%);padding:10px}
+    .screen::before{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.18) 3px)}
+    .top{height:38px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 8px;color:var(--dim);font-size:24px}
+    .body{margin-top:8px;height:290px;display:grid;grid-template-columns:220px 1fr;gap:8px}
+    .pane{border:1px solid var(--line);background:var(--panel);padding:6px;overflow:hidden}
+    .mode-btn{display:block;width:100%;margin-bottom:6px;border:1px solid var(--line);background:transparent;color:var(--dim);font:inherit;font-size:20px;padding:4px;text-align:left}
+    .mode-btn.active{color:var(--text);border-color:var(--text)}
+    .line{font-size:19px;line-height:1.2;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .info{color:var(--text)} .warn{color:var(--warn)} .critical{color:var(--bad)}
+    .footer{margin-top:8px;height:38px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-around;color:var(--dim);font-size:20px}
+    .tab{border:1px solid var(--line);padding:2px 8px}
+    .active-tab{color:var(--text);border-color:var(--text)}
+    a{color:inherit;text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="safe">
+    <div class="screen">
+      <div class="top">
+        <div id="title">ALERTS | STATS</div>
+        <div id="clock">--:--:--</div>
+      </div>
+
+      <div class="body">
+        <div class="pane">
+          <button class="mode-btn active" data-mode="stats">STATS</button>
+          <button class="mode-btn" data-mode="live">LIVE</button>
+          <button class="mode-btn" data-mode="check">CHECK</button>
+          <button class="mode-btn" data-mode="network">NETWORK</button>
+          <button class="mode-btn" data-mode="logs">LOGS</button>
+        </div>
+        <div class="pane" id="content"></div>
+      </div>
+
+      <div class="footer">
+        <a class="tab" href="index.html">F1 OVERVIEW</a>
+        <div class="tab active-tab">F2 ALERTS</div>
+        <a class="tab" href="processes.html">F3 PROCESSES</a>
+      </div>
+    </div>
+  </div>
+<script>
+  const API = "http://192.168.0.54:8765";
+  const POLL_MS = 2000;
+  const MAX_ROWS = 12;
+
+  let mode = "stats";
+  let timer = null;
+
+  let liveFeed = [];
+  const liveSeen = new Set();
+
+  function cls(sev) {
+    const s = (sev || "INFO").toUpperCase();
+    if (s === "CRITICAL") return "critical";
+    if (s === "WARN") return "warn";
+    return "info";
+  }
+
+  function setMode(next) {
+    mode = next;
+    document.getElementById("title").textContent = `ALERTS | ${next.toUpperCase()}`;
+    document.querySelectorAll(".mode-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.mode === next);
+    });
+
+    if (timer) clearInterval(timer);
+    tick();
+    timer = setInterval(tick, POLL_MS);
+  }
+
+  function renderLines(lines) {
+    const c = document.getElementById("content");
+    if (!lines.length) {
+      c.innerHTML = `<div class="line info">No data.</div>`;
+      return;
+    }
+    c.innerHTML = lines.join("");
+  }
+
+  async function fetchStats() {
+    const r = await fetch(`${API}/api/alerts/stats`, { cache: "no-store" });
+    const j = await r.json();
+    const h = j.stats?.last_hour || {};
+    const d = j.stats?.last_day || {};
+
+    renderLines([
+      `<div class="line info">Last hour</div>`,
+      `<div class="line info">INFO=${h.INFO || 0} WARN=${h.WARN || 0} CRITICAL=${h.CRITICAL || 0}</div>`,
+      `<div class="line info">---</div>`,
+      `<div class="line info">Last day</div>`,
+      `<div class="line info">INFO=${d.INFO || 0} WARN=${d.WARN || 0} CRITICAL=${d.CRITICAL || 0}</div>`
+    ]);
+  }
+
+  async function fetchLive() {
+    const r = await fetch(`${API}/api/alerts/live`, { cache: "no-store" });
+    const j = await r.json();
+    const incoming = (j.items || []).sort((a, b) => (a.ts || 0) - (b.ts || 0)); // old -> new
+
+    for (const a of incoming) {
+      const key =
+        a.event_key ||
+        `${a.type}|${a.process}|${a.pid}|${a.remote_ip}|${a.remote_port}|${a.ts}`;
+      if (liveSeen.has(key)) continue;
+      liveSeen.add(key);
+      liveFeed.unshift(a); // newest on top
+    }
+
+    liveFeed = liveFeed.slice(0, MAX_ROWS);
+
+    renderLines(
+      liveFeed.map((a) => {
+        const t = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "--:--:--";
+        const ip = a.remote_ip ? ` ip=${a.remote_ip}` : "";
+        const port = a.remote_port ? ` port=${a.remote_port}` : "";
+        return `<div class="line ${cls(a.severity)}">[${a.severity || "INFO"}] [${t}] ${a.type || "event"} -> ${a.process || "N/A"}${ip}${port}</div>`;
+      })
+    );
+  }
+
+  async function fetchCheck() {
+    const r = await fetch(`${API}/api/alerts/check`, { cache: "no-store" });
+    const j = await r.json();
+    const items = (j.items || [])
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+      .slice(0, MAX_ROWS);
+
+    renderLines(
+      items.map((a) => {
+        const t = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "--:--:--";
+        const ip = a.remote_ip ? ` ip=${a.remote_ip}` : "";
+        const port = a.remote_port ? ` port=${a.remote_port}` : "";
+        return `<div class="line ${cls(a.severity)}">[${a.severity || "INFO"}] [${t}] ${a.type || "event"} -> ${a.process || "N/A"}${ip}${port}</div>`;
+      })
+    );
+  }
+
+  async function fetchNetwork() {
+    const r = await fetch(`${API}/api/network/processes`, { cache: "no-store" });
+    const j = await r.json();
+    const items = (j.items || []).slice(0, MAX_ROWS);
+
+    renderLines(
+      items.map((p) => {
+        const c = p.connections || 0;
+        const cc = c >= 30 ? "critical" : c >= 15 ? "warn" : "info";
+        return `<div class="line ${cc}">[${p.pid ?? "N/A"}] ${p.name} | conn=${c} | ips=${p.unique_ips || 0}</div>`;
+      })
+    );
+  }
+
+  async function fetchLogs() {
+    const r = await fetch(`${API}/api/alerts/logs?limit=${MAX_ROWS}`, { cache: "no-store" });
+    const j = await r.json();
+    const items = (j.items || []).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+    renderLines(
+      items.map((a) => {
+        const t = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "--:--:--";
+        return `<div class="line ${cls(a.severity)}">[${a.severity || "INFO"}] [${t}] ${a.type || "event"} -> ${a.process || "N/A"}</div>`;
+      })
+    );
+  }
+
+  async function tick() {
+    document.getElementById("clock").textContent = new Date().toLocaleTimeString();
+    try {
+      if (mode === "stats") return await fetchStats();
+      if (mode === "live") return await fetchLive();
+      if (mode === "check") return await fetchCheck();
+      if (mode === "network") return await fetchNetwork();
+      if (mode === "logs") return await fetchLogs();
+    } catch (e) {
+      document.getElementById("content").innerHTML = `<div class="line critical">HOST OFFLINE</div>`;
+    }
+  }
+
+  document.querySelectorAll(".mode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => setMode(btn.dataset.mode));
+  });
+
+  setMode("stats");
+</script>
+
+</body>
+</html>
+
