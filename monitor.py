@@ -14,6 +14,7 @@ from core.alert_manager import AlertManager
 from core.ignore_list import IgnoreList
 from core.display import print_startup_info
 from tray.tray_manager import TrayManager
+from api.server import run_api_server
 
 
 class MonitorApp:
@@ -23,6 +24,8 @@ class MonitorApp:
         self.alert_manager = AlertManager(self.ignore_list)
         self.running = True
         self.last_top_processes = []
+        self.api_host = "0.0.0.0"
+        self.api_port = 8765
      
 
     def background_monitor(self):
@@ -34,11 +37,22 @@ class MonitorApp:
                 pass
             time.sleep(2)
 
+    def start_api(self):
+        """Start HTTP API in a background daemon thread using shared app state."""
+        def _api_runner():
+            try:
+                run_api_server(host=self.api_host, port=self.api_port, app=self)
+            except Exception as exc:
+                print(f"[WARN] API server failed to start: {exc}")
+
+        threading.Thread(target=_api_runner, daemon=True).start()
+
     def run(self):
         print_startup_info()
         print("Starting NetOpenWatchPi with System Tray...\n")
 
         threading.Thread(target=self.background_monitor, daemon=True).start()
+        self.start_api()
 
         self.tray = TrayManager(self)
         self.tray.create_tray()
