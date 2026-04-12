@@ -228,15 +228,25 @@
     const r = await fetch(`${API}/api/alerts/stats`, { cache: "no-store" });
     const j = await r.json();
     if (epoch !== modeEpoch || mode !== "stats") return;
-    const h = j.stats?.last_hour || {};
-    const d = j.stats?.last_day || {};
+    const s = j.stats || {};
+    const h = s.last_hour || {};
+    const d = s.last_day || {};
+
+    const fmtTs = (ts) => ts ? new Date(ts * 1000).toLocaleTimeString() : "--:--:--";
+    const lastAlert = s.last_alert;
+    const lastCritical = s.last_critical;
 
     renderLines([
-      `<div class="line info">Last hour</div>`,
-      `<div class="line info">INFO=${h.INFO || 0} WARN=${h.WARN || 0} CRITICAL=${h.CRITICAL || 0}</div>`,
-      `<div class="line info">---</div>`,
-      `<div class="line info">Last day</div>`,
-      `<div class="line info">INFO=${d.INFO || 0} WARN=${d.WARN || 0} CRITICAL=${d.CRITICAL || 0}</div>`
+      `<div class="line info">[WINDOWS]</div>`,
+      `<div class="line info">1H  I:${h.INFO || 0}  W:${h.WARN || 0}  C:${h.CRITICAL || 0}</div>`,
+      `<div class="line info">24H I:${d.INFO || 0}  W:${d.WARN || 0}  C:${d.CRITICAL || 0}</div>`,
+      `<div class="line info">[NOW]</div>`,
+      `<div class="line info">ACTIVE ${s.active_total ?? 0} | LIVE ${s.live_feed_total ?? 0}</div>`,
+      `<div class="line info">PROC ${s.processes_with_network ?? 0} | CONN ${s.connections_total ?? 0}</div>`,
+      `<div class="line warn">RISKS  C:${s.risk_critical ?? 0}  W:${s.risk_warn ?? 0}  TOTAL:${s.risk_total ?? 0}</div>`,
+      `<div class="line info">[RECENT]</div>`,
+      `<div class="line ${cls(lastAlert?.severity)}">LAST  ${lastAlert?.severity || "NONE"}  ${fmtTs(lastAlert?.ts)}  ${lastAlert?.process || "-"}</div>`,
+      `<div class="line critical">CRIT  ${fmtTs(lastCritical?.ts)}  ${lastCritical?.process || "NONE"}</div>`
     ]);
   }
 

@@ -149,7 +149,10 @@ def make_api_handler(app=None):
                 return _json_response(self, {"version": "1.0", "generated_at": time.time(), "items": items})
 
             if req_path == "/api/alerts/stats":
-                stats = alert_manager.get_alert_stats()
+                if app is not None:
+                    stats = app.build_alerts_stats_summary()
+                else:
+                    stats = alert_manager.get_alert_stats()
                 return _json_response(self, {"version": "1.0", "generated_at": time.time(), "stats": stats})
 
             if req_path == "/api/alerts/live":

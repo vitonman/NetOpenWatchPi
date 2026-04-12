@@ -200,6 +200,7 @@ class MonitorApp:
 
     def build_risks_snapshot(self):
         self._refresh_risks_snapshot(now=time.time())
+        severity_rank = {"INFO": 1, "WARN": 2, "CRITICAL": 3}
         items = []
         for item in self.risk_memory.values():
             items.append(
@@ -225,6 +226,41 @@ class MonitorApp:
             reverse=True,
         )
         return items
+
+    def build_alerts_stats_summary(self):
+        """Return compact alert-center stats for the UI."""
+        stats = self.alert_manager.get_alert_stats()
+        risks = self.build_risks_snapshot()
+        total_connections = sum(
+            data.get("connections", 0) for data in self.current_processes.values()
+        )
+
+        recent_live = self.live_feed[0] if self.live_feed else None
+        recent_critical = next((item for item in self.live_feed if item.get("severity") == "CRITICAL"), None)
+
+        return {
+            "last_hour": stats.get("last_hour", {}),
+            "last_day": stats.get("last_day", {}),
+            "active_total": len(self.alert_manager.active_alert_keys),
+            "live_feed_total": len(self.live_feed),
+            "live_revision": self.live_feed_revision,
+            "processes_with_network": len(self.current_processes),
+            "connections_total": total_connections,
+            "risk_total": len(risks),
+            "risk_critical": sum(1 for item in risks if item.get("severity") == "CRITICAL"),
+            "risk_warn": sum(1 for item in risks if item.get("severity") == "WARN"),
+            "last_alert": {
+                "severity": recent_live.get("severity"),
+                "process": recent_live.get("process"),
+                "type": recent_live.get("type"),
+                "ts": recent_live.get("ts"),
+            } if recent_live else None,
+            "last_critical": {
+                "process": recent_critical.get("process"),
+                "type": recent_critical.get("type"),
+                "ts": recent_critical.get("ts"),
+            } if recent_critical else None,
+        }
 
 
     def start_api(self):
