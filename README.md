@@ -1,29 +1,150 @@
-﻿# NetOpenWatchPi
+# NetOpenWatchPi
 
-CLI/GUI monitor for process network activity and core system metrics.  
-The project is designed to collect data on the host machine (Windows/Linux) and later display it on a Raspberry Pi screen.
+NetOpenWatchPi is a host-side network and system monitor with:
 
-## Implemented Features
+- a CLI for diagnostics and investigation
+- an embedded HTTP API
+- a Raspberry Pi style frontend for a 640x480 display
+- snapshot-based forensic views for desktop analysis
 
-- Process list with network activity and connection counters.
-- Detailed process view (`processinfo`, `pidinfo`) with IP/port/state data.
-- Local alert engine:
-  - `INFO/WARN/CRITICAL` severities
-  - cooldown support
-  - stateful alert memory (reduced repeated noise)
-  - `alert_resolved` events when a condition disappears
-- Alert logging to `logs/alerts.jsonl`.
-- Alert history view (`alertslog [N]`).
-- Realtime alert stream (`alertswatch [sec]`).
-- Hardware overview (`hwinfo`) and temperatures (`temps`) with fallbacks.
+The host machine runs the monitoring engine. The Pi screen acts as a compact dashboard and control surface.
+
+## What It Does
+
+- Monitors processes with network activity
+- Tracks connection counts, unique IPs, ports, states, and remote endpoints
+- Generates local `INFO / WARN / CRITICAL` alerts
+- Keeps alert state with cooldowns and `alert_resolved` events
+- Logs alerts to JSONL
+- Builds live alert feeds for the frontend
+- Builds current risk summaries for suspicious processes
+- Creates point-in-time network snapshots for later analysis
+- Exposes a lightweight API used by the frontend
+
+## Architecture
+
+There is now one main runtime:
+
+- `monitor.py`
+
+It starts:
+
+- the background monitoring loop
+- the embedded API server
+- the CLI
+- tray integration
+
+Important: the frontend should talk to the API started by `monitor.py`.
+Do not run a second standalone API process unless you explicitly want separate state.
+
+## Main Runtime Flow
+
+Background loop in `monitor.py`:
+
+1. Collect current process/network data
+2. Run anomaly detection through `AlertManager`
+3. Update live alert feed
+4. Refresh current risk snapshot
+5. Expose read-only state to the API/UI
+
+This keeps the frontend read-only. Polling the UI does not drive the alert engine.
+
+## Frontend Screens
+
+The Pi UI lives in `netopenwatchpi-ui/`.
+
+- `index.html` -> `F1 CLOCK`
+- `overview.html` -> `F2 PC OVERVIEW`
+- `alerts.html` -> `F3 ALERTS`
+- `processes.html` -> `F4 PROCESSES`
+- `snapshot.html` -> desktop snapshot analysis page
+
+### F1 CLOCK
+
+- Large clock/date
+- Critical alert indicator
+- Home screen for the device
+
+### F2 PC OVERVIEW
+
+- CPU load / temp / frequency
+- Memory usage
+- GPU load / temp / VRAM
+- Network totals
+- Storage summary
+
+### F3 ALERTS
+
+Modes:
+
+- `STATS` -> alert overview
+- `LIVE` -> realtime alert feed
+- `SNAPSHOT` -> create network snapshots
+- `RISKS` -> current suspicious process summary
+- `LOGS` -> scrollable alert history
+
+### F4 PROCESSES
+
+- Current process list with connection counts
+- Navigation-ready list for future detailed process drill-down
+
+## Snapshot Model
+
+Snapshots are created from the device UI, but analyzed on a normal browser page.
+
+Device side:
+
+- `F3 -> SNAPSHOT -> MAKE SNAPSHOT`
+
+Desktop side:
+
+- `snapshot.html`
+
+Each snapshot stores:
+
+- timestamp / label / hostname
+- process list
+- connections total
+- established total
+- unique IP totals
+- remote endpoint totals
+- current risks
+- active alerts at the time of capture
+
+Snapshots are written to:
+
+- `logs/snapshots/`
+
+## Controls / Navigation Model
+
+The UI is being optimized for hardware controls rather than mouse-first navigation.
+
+Planned control model:
+
+- `MODE` -> cycle `F1/F2/F3/F4`
+- `UP`
+- `DOWN`
+- `SELECT`
+- `BACK`
+- `LONG PRESS BACK` -> go to `CLOCK`
+
+Current keyboard emulation:
+
+- `Tab` or `M` -> `MODE`
+- `ArrowUp` -> `UP`
+- `ArrowDown` -> `DOWN`
+- `Enter` -> `SELECT`
+- `Escape` or `Backspace` -> `BACK`
+- hold `Escape` / `Backspace` -> `CLOCK`
 
 ## Requirements
 
 - Python 3.10+
-- OS: Windows (primary current target), Linux (partial support)
+- Windows is the main current target
+- Linux / Raspberry Pi are supported for frontend hosting / deployment flow
 - Dependencies from `requirements.txt`
 
-## Quick Start (Windows)
+## Quick Start (Windows Host)
 
 ```powershell
 cd D:\Repos\NetOpenWatchPi
@@ -33,73 +154,132 @@ pip install -r requirements.txt
 python monitor.py
 ```
 
-## Quick Start (Linux / Raspberry Pi)
+Frontend dev server:
+
+```powershell
+cd D:\Repos\NetOpenWatchPi\netopenwatchpi-ui
+python -m http.server 8080
+```
+
+Open locally:
+
+- `http://localhost:8080/index.html`
+- `http://localhost:8080/overview.html`
+- `http://localhost:8080/alerts.html`
+- `http://localhost:8080/processes.html`
+- `http://localhost:8080/snapshot.html`
+
+## Raspberry Pi Frontend
+
+On the Pi:
 
 ```bash
-cd /path/to/NetOpenWatchPi
-bash start.sh
+cd ~/Repos/NetOpenWatchPi/netopenwatchpi-ui
+python3 -m http.server 8080 --bind 0.0.0.0
 ```
+
+Then open:
+
+- `http://<pi-ip>:8080/index.html`
+
+Important:
+
+- Pi frontend is just static HTML/CSS/JS
+- host monitoring/API still runs on the monitored PC
+- UI pages use the host API base URL, for example:
+  - `http://192.168.0.54:8765`
 
 ## Temperatures on Windows
 
-For stable `temps` output on Windows, LibreHardwareMonitor is recommended:
+For stable temperature data on Windows, LibreHardwareMonitor is recommended.
 
-1. Start LibreHardwareMonitor.
-2. Enable `Options -> Remote Web Server -> Run`.
-3. Verify JSON endpoint:
+1. Start LibreHardwareMonitor
+2. Enable `Options -> Remote Web Server -> Run`
+3. Verify:
 
 ```powershell
 Invoke-WebRequest http://127.0.0.1:8085/data.json | Select-Object -ExpandProperty Content
 ```
 
-If JSON is reachable, `temps` should show values (or `N/A` if a specific sensor is unavailable).
-
 ## Main CLI Commands
 
-- `status` - show system metrics + top list
-- `top` - show top processes by connections
-- `network processes` - show processes with external connections
-- `threats` - show local threat/whitelist database
-- `risks` - show global risk summary for active connections
-- `stats` - show alert statistics (hour/day)
-- `processinfo <name.exe>` - detailed view by process name
-- `pidinfo <pid>` - detailed view by PID
+- `status` - show compact system status
+- `top` - top processes by connections
+- `network processes` - external connection summary
+- `threats` - current threat database / whitelist
+- `risks` - global risk summary for active connections
+- `stats` - alert statistics
+- `processinfo <name.exe>` - detailed process info by name
+- `pidinfo <pid>` - detailed process info by PID
 - `temps` - show temperatures
 - `hwinfo` - show hardware information
-- `alerts` - run one-time anomaly check
-- `alertswatch [sec]` - realtime alert stream, stop with `Ctrl+C`
-- `alertslog [N]` - show last N alerts from log
+- `alerts` - run one-shot anomaly check
+- `alertswatch [sec]` - realtime alert stream
+- `alertslog [N]` - show alert history from log
 - `list` / `ignore` - show ignore list
-- `add <name|number>` - add process to ignore list
-- `remove <name>` - remove process from ignore list
+- `add <name|number>` - add ignored process
+- `remove <name>` - remove ignored process
 - `gui` - open GUI window
-- `permdiag` - permission/socket visibility diagnostics
-- `help` - show command help
+- `permdiag` - socket/permission diagnostics
+- `help` - show help
 - `quit` - exit
+
+## API Overview
+
+Current important endpoints:
+
+- `/api/status`
+- `/api/processes`
+- `/api/network/processes`
+- `/api/alerts/stats`
+- `/api/alerts/live`
+- `/api/alerts/risks`
+- `/api/alerts/logs`
+- `/api/snapshots/create`
+- `/api/snapshots/list`
+- `/api/snapshots/get?file=...`
 
 ## Config and Data Files
 
 - `config/config.json` - ignored processes
-- `logs/alerts.jsonl` - alert history (JSONL)
-- `logs/alert_state.json` - persisted alert engine state
+- `config/threats.json` - threat/whitelist rules
+- `logs/alerts.jsonl` - alert history
+- `logs/alert_state.json` - persisted alert state
+- `logs/snapshots/` - saved network snapshots
 
-### Reset Alert State
+## Resetting State
 
-Stop the app and delete:
+Stop the app and delete what you need:
 
-- `logs/alert_state.json` - reset seen/active state memory
-- `logs/alerts.jsonl` - reset history (optional)
+- `logs/alert_state.json` - reset seen/active alert state
+- `logs/alerts.jsonl` - reset alert history
+- `logs/snapshots/` - clear saved snapshots
 
 ## Project Structure
 
-- `monitor.py` - CLI app, command routing, output formatting
-- `core/network_collector.py` - per-process network data collection
-- `core/alert_manager.py` - anomaly rules and alert lifecycle
-- `core/threat_engine.py` - local threat rules
-- `core/metrics.py` - system/hardware metrics
+- `monitor.py` - main runtime, CLI, background loop, embedded API startup
+- `api/server.py` - HTTP API
+- `core/network_collector.py` - per-process network collection
+- `core/alert_manager.py` - alert lifecycle and anomaly rules
+- `core/threat_engine.py` - threat/risk rules
+- `core/metrics.py` - hardware/system metrics
 - `gui/main_window.py` - GUI window
-- `tray/tray_manager.py` - system tray integration
+- `tray/tray_manager.py` - tray integration
+- `netopenwatchpi-ui/` - Pi UI + desktop snapshot page
 
 ## Current Status
 
-Backend/CLI is close to feature-complete. The next major step is Raspberry Pi frontend/UX integration and dashboard flow.
+Working now:
+
+- unified host runtime (`monitor.py`)
+- live alerts
+- stats
+- snapshots
+- desktop snapshot analysis
+- keyboard/device navigation foundation
+
+Still in progress:
+
+- richer `LOGS` details
+- full `F4 PROCESSES` drill-down and process detail view
+- tighter hardware control integration with the final encoder/button wiring
