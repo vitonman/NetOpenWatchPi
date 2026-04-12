@@ -1,5 +1,6 @@
 # api/server.py
 import json
+import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -28,7 +29,7 @@ def _json_response(handler: BaseHTTPRequestHandler, payload: dict, status: int =
         return
 
 
-def _read_alert_logs(limit: int = 50, since_ts=None):
+def _load_alert_log_items():
     items = []
     try:
         with open("logs/alerts.jsonl", "r", encoding="utf-8") as f:
@@ -40,16 +41,40 @@ def _read_alert_logs(limit: int = 50, since_ts=None):
                     a = json.loads(ln)
                 except json.JSONDecodeError:
                     continue
-                ts = a.get("ts")
-                if since_ts is not None:
-                    if not isinstance(ts, (int, float)) or ts <= since_ts:
-                        continue
                 items.append(a)
     except FileNotFoundError:
         return []
 
     items.sort(key=lambda x: x.get("ts", 0))  # old -> new
-    return items[-limit:] if since_ts is None else items[:limit]
+    return items
+
+
+def _read_alert_logs(limit: int = 50, since_ts=None, offset: int = 0):
+    items = _load_alert_log_items()
+    if since_ts is not None:
+        filtered = []
+        for a in items:
+            ts = a.get("ts")
+            if not isinstance(ts, (int, float)) or ts <= since_ts:
+                continue
+            filtered.append(a)
+        return filtered[:limit], len(filtered)
+
+    total = len(items)
+    if total == 0:
+        return [], 0
+
+    try:
+        offset = int(offset)
+    except (TypeError, ValueError):
+        offset = 0
+    if offset < 0:
+        offset = 0
+
+    end = max(total - offset, 0)
+    start = max(end - limit, 0)
+    window = items[start:end]
+    return window, total
 
 
 def make_api_handler(app=None):
@@ -184,12 +209,91 @@ def make_api_handler(app=None):
                 items.sort(key=lambda x: x.get("ts", 0), reverse=True)
                 return _json_response(self, {"version": "1.0", "generated_at": time.time(), "items": items})
 
+            if req_path == "/api/snapshots/create":
+                if app is None:
+                    return _json_response(
+                        self,
+                        {"error": "snapshot_unavailable", "message": "Snapshots require shared app state."},
+                        status=503,
+                    )
+
+                snapshot = app.make_network_snapshot()
+                return _json_response(
+                    self,
+                    {"version": "1.0", "generated_at": time.time(), "snapshot": snapshot},
+                )
+
+            if req_path == "/api/snapshots/list":
+                if app is not None:
+                    limit = int(query.get("limit", ["8"])[0])
+                    items = app.list_network_snapshots(limit=limit)
+                else:
+                    items = []
+                return _json_response(
+                    self,
+                    {"version": "1.0", "generated_at": time.time(), "items": items},
+                )
+
+            if req_path == "/api/snapshots/get":
+                if app is None:
+                    return _json_response(
+                        self,
+                        {"error": "snapshot_unavailable", "message": "Snapshots require shared app state."},
+                        status=503,
+                    )
+
+                filename = query.get("file", [""])[0]
+                safe_name = os.path.basename(filename)
+                if not safe_name or safe_name != filename or not safe_name.lower().endswith(".json"):
+                    return _json_response(
+                        self,
+                        {"error": "invalid_snapshot_file", "path": filename},
+                        status=400,
+                    )
+
+                path = os.path.join(app.snapshot_dir, safe_name)
+                if not os.path.isfile(path):
+                    return _json_response(
+                        self,
+                        {"error": "snapshot_not_found", "path": safe_name},
+                        status=404,
+                    )
+
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                except (OSError, json.JSONDecodeError):
+                    return _json_response(
+                        self,
+                        {"error": "snapshot_read_failed", "path": safe_name},
+                        status=500,
+                    )
+
+                return _json_response(
+                    self,
+                    {"version": "1.0", "generated_at": time.time(), "snapshot": payload},
+                )
+
             if req_path in ("/api/alerts/logs", "/api/alerts"):
                 limit = int(query.get("limit", ["50"])[0])
+                try:
+                    offset = int(query.get("offset", ["0"])[0])
+                except (TypeError, ValueError):
+                    offset = 0
                 since_raw = query.get("since_ts", [None])[0]
                 since_ts = float(since_raw) if since_raw not in (None, "") else None
-                items = _read_alert_logs(limit=limit, since_ts=since_ts)
-                return _json_response(self, {"version": "1.0", "generated_at": time.time(), "items": items})
+                items, total = _read_alert_logs(limit=limit, since_ts=since_ts, offset=offset)
+                return _json_response(
+                    self,
+                    {
+                        "version": "1.0",
+                        "generated_at": time.time(),
+                        "items": items,
+                        "total": total,
+                        "offset": offset,
+                        "limit": limit,
+                    },
+                )
             
             if req_path == "/api/alerts/risks":
                 items = app.build_risks_snapshot() if app is not None else []

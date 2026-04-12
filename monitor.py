@@ -35,6 +35,7 @@ class MonitorApp:
         self.live_feed_revision = 0
         self.risk_memory = {}
         self.risk_ttl_sec = 90
+        self.snapshot_dir = os.path.join("logs", "snapshots")
      
 
     def background_monitor(self):
@@ -261,6 +262,259 @@ class MonitorApp:
                 "ts": recent_critical.get("ts"),
             } if recent_critical else None,
         }
+
+    def build_active_alerts_snapshot(self):
+        """Return currently active alerts with best-effort event details."""
+        severity_by_type = {
+            "high_connections": "WARN",
+            "many_unique_ips": "WARN",
+            "heavy_traffic": "WARN",
+            "new_process_on_network": "INFO",
+            "new_remote_ip_for_process": "INFO",
+            "watchlist_ip_match": "CRITICAL",
+            "suspicious_port": "WARN",
+            "known_malware_process": "CRITICAL",
+        }
+
+        def parse_event_key(event_key):
+            parts = event_key.split("|", 4)
+            if len(parts) != 5:
+                return None
+            event_type, process, pid_raw, ip_raw, port_raw = parts
+            try:
+                pid_val = None if pid_raw in ("None", "", "null") else int(pid_raw)
+            except ValueError:
+                pid_val = None
+            ip_val = None if ip_raw in ("None", "", "null") else ip_raw
+            try:
+                port_val = None if port_raw in ("None", "", "null") else int(port_raw)
+            except ValueError:
+                port_val = None
+            return event_type, process, pid_val, ip_val, port_val
+
+        latest_by_key = {}
+        for item in self.live_feed:
+            event_key = item.get("event_key")
+            if not event_key:
+                continue
+            if item.get("type") == "alert_resolved":
+                continue
+            prev = latest_by_key.get(event_key)
+            if prev is None or item.get("ts", 0) > prev.get("ts", 0):
+                latest_by_key[event_key] = item
+
+        items = []
+        for event_key in sorted(self.alert_manager.active_alert_keys):
+            parsed = parse_event_key(event_key)
+            if not parsed:
+                continue
+
+            event_type, process, pid_val, ip_val, port_val = parsed
+            live_item = latest_by_key.get(event_key, {})
+            items.append(
+                {
+                    "event_key": event_key,
+                    "type": event_type,
+                    "severity": live_item.get("severity") or severity_by_type.get(event_type, "INFO"),
+                    "process": process,
+                    "pid": live_item.get("pid", pid_val),
+                    "remote_ip": live_item.get("remote_ip", ip_val),
+                    "remote_port": live_item.get("remote_port", port_val),
+                    "reason": live_item.get("reason", ""),
+                    "ts": live_item.get("ts"),
+                }
+            )
+
+        severity_rank = {"INFO": 1, "WARN": 2, "CRITICAL": 3}
+        items.sort(
+            key=lambda x: (
+                severity_rank.get(x.get("severity"), 0),
+                x.get("ts") or 0,
+            ),
+            reverse=True,
+        )
+        return items
+
+    def _build_snapshot_process_items(self):
+        """Build a detailed point-in-time process/network fingerprint."""
+        process_map = {}
+
+        for conn in psutil.net_connections(kind="inet4"):
+            if conn.pid is None:
+                continue
+
+            try:
+                name = psutil.Process(conn.pid).name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+            key = (conn.pid, name)
+            item = process_map.get(key)
+            if item is None:
+                item = {
+                    "name": name,
+                    "pid": conn.pid,
+                    "connections": 0,
+                    "unique_ips": set(),
+                    "remote_ports": set(),
+                    "remote_endpoints": set(),
+                    "local_endpoints": set(),
+                    "protocols": {"TCP": 0, "UDP": 0},
+                    "states": defaultdict(int),
+                }
+                process_map[key] = item
+
+            item["connections"] += 1
+
+            proto = "TCP" if conn.type == socket.SOCK_STREAM else "UDP"
+            item["protocols"][proto] += 1
+
+            if conn.status:
+                item["states"][conn.status] += 1
+
+            if conn.laddr:
+                local_ip = getattr(conn.laddr, "ip", None)
+                local_port = getattr(conn.laddr, "port", None)
+                if local_ip is not None and local_port is not None:
+                    item["local_endpoints"].add(f"{local_ip}:{local_port}")
+
+            if conn.raddr:
+                remote_ip = getattr(conn.raddr, "ip", None)
+                remote_port = getattr(conn.raddr, "port", None)
+                if remote_ip:
+                    item["unique_ips"].add(remote_ip)
+                if remote_port is not None:
+                    item["remote_ports"].add(remote_port)
+                if remote_ip is not None and remote_port is not None:
+                    item["remote_endpoints"].add(f"{remote_ip}:{remote_port}")
+
+        items = []
+        for item in process_map.values():
+            states = dict(sorted(item["states"].items()))
+            items.append(
+                {
+                    "name": item["name"],
+                    "pid": item["pid"],
+                    "connections": item["connections"],
+                    "unique_ips_count": len(item["unique_ips"]),
+                    "unique_ips": sorted(item["unique_ips"]),
+                    "remote_ports": sorted(item["remote_ports"]),
+                    "remote_endpoints": sorted(item["remote_endpoints"]),
+                    "local_endpoints": sorted(item["local_endpoints"]),
+                    "established": states.get("ESTABLISHED", 0),
+                    "protocols": item["protocols"],
+                    "states": states,
+                }
+            )
+
+        items.sort(
+            key=lambda x: (x.get("connections", 0), x.get("unique_ips_count", 0)),
+            reverse=True,
+        )
+        return items
+
+    def make_network_snapshot(self):
+        """Create a point-in-time fingerprint of current network activity."""
+        ts = time.time()
+        processes = self.current_processes or self.collector.collect_network_data()
+        self.current_processes = processes
+        risks = self.build_risks_snapshot()
+        active_alerts = self.build_active_alerts_snapshot()
+        process_items = self._build_snapshot_process_items()
+
+        os.makedirs(self.snapshot_dir, exist_ok=True)
+
+        payload = {
+            "version": "1.0",
+            "ts": ts,
+            "label": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
+            "system": {
+                "hostname": socket.gethostname(),
+            },
+            "totals": {
+                "processes_with_network": len(process_items),
+                "connections_total": sum(item.get("connections", 0) for item in process_items),
+                "established_total": sum(item.get("established", 0) for item in process_items),
+                "unique_ips_total": len(
+                    {
+                        ip
+                        for item in process_items
+                        for ip in item.get("unique_ips", [])
+                    }
+                ),
+                "remote_endpoints_total": len(
+                    {
+                        endpoint
+                        for item in process_items
+                        for endpoint in item.get("remote_endpoints", [])
+                    }
+                ),
+                "active_alert_total": len(active_alerts),
+                "active_critical_total": sum(1 for item in active_alerts if item.get("severity") == "CRITICAL"),
+                "active_warn_total": sum(1 for item in active_alerts if item.get("severity") == "WARN"),
+                "risk_total": len(risks),
+                "risk_critical": sum(1 for item in risks if item.get("severity") == "CRITICAL"),
+                "risk_warn": sum(1 for item in risks if item.get("severity") == "WARN"),
+            },
+            "processes": process_items,
+            "risks": risks,
+            "active_alerts": active_alerts,
+        }
+
+        filename = time.strftime("snapshot_%Y%m%d_%H%M%S.json", time.localtime(ts))
+        path = os.path.join(self.snapshot_dir, filename)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        return {
+            "filename": filename,
+            "ts": ts,
+            "label": payload["label"],
+            "totals": payload["totals"],
+        }
+
+    def list_network_snapshots(self, limit=8):
+        """Return recent saved network snapshots with compact summaries."""
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 8
+        if limit <= 0:
+            limit = 8
+
+        if not os.path.isdir(self.snapshot_dir):
+            return []
+
+        items = []
+        for name in sorted(os.listdir(self.snapshot_dir), reverse=True):
+            if not name.lower().endswith(".json"):
+                continue
+
+            path = os.path.join(self.snapshot_dir, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            totals = payload.get("totals", {})
+            items.append(
+                {
+                    "filename": name,
+                    "ts": payload.get("ts"),
+                    "label": payload.get("label") or name,
+                    "processes_with_network": totals.get("processes_with_network", 0),
+                    "connections_total": totals.get("connections_total", 0),
+                    "risk_total": totals.get("risk_total", 0),
+                    "risk_critical": totals.get("risk_critical", 0),
+                    "risk_warn": totals.get("risk_warn", 0),
+                }
+            )
+
+            if len(items) >= limit:
+                break
+
+        return items
 
 
     def start_api(self):

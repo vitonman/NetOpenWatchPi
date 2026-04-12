@@ -17,6 +17,7 @@
     .top{height:38px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 8px;color:var(--dim);font-size:24px}
     .list{margin-top:8px;height:335px;border:1px solid var(--line);background:var(--panel);padding:6px;overflow:hidden}
     .row{font-size:22px;line-height:1.15;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .row.selected{background:rgba(153,255,159,.10);border-left:2px solid var(--text)}
     .warn{color:var(--warn)} .bad{color:var(--bad)}
     .footer{margin-top:8px;height:42px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-around;color:var(--dim);font-size:24px}
     .tab{border:1px solid var(--line);padding:1px 8px}
@@ -43,8 +44,13 @@
     </div>
   </div>
 
+  <script src="nav.js"></script>
   <script>
     const API = "http://192.168.0.54:8765";
+    const MAX_ROWS = 14;
+    let processesCache = [];
+    let selectedIndex = 0;
+    let processOffset = 0;
 
     function sev(conn){
       if(conn >= 30) return "bad";
@@ -52,30 +58,89 @@
       return "";
     }
 
+    function renderProcesses(){
+      const list = document.getElementById("list");
+      const visible = processesCache.slice(processOffset, processOffset + MAX_ROWS);
+
+      if(!visible.length){
+        list.innerHTML = `<div class="row">No active processes.</div>`;
+        return;
+      }
+
+      list.innerHTML = visible.map((p, idx)=>{
+        const cls = sev(p.connections || 0);
+        const pid = p.pid ?? "N/A";
+        const c = p.connections ?? 0;
+        const ips = p.unique_ips ?? 0;
+        const selected = idx === selectedIndex ? " selected" : "";
+        return `<div class="row ${cls}${selected}">[${pid}] ${p.name} | conn=${c} | ips=${ips}</div>`;
+      }).join("");
+    }
+
+    function clampSelection(){
+      const visibleCount = Math.min(MAX_ROWS, Math.max(processesCache.length - processOffset, 0));
+      if (visibleCount <= 0) {
+        selectedIndex = 0;
+        processOffset = 0;
+        return;
+      }
+      if (selectedIndex >= visibleCount) {
+        selectedIndex = visibleCount - 1;
+      }
+      if (selectedIndex < 0) {
+        selectedIndex = 0;
+      }
+    }
+
+    function moveSelection(delta){
+      if(!processesCache.length) return;
+
+      const absoluteIndex = processOffset + selectedIndex + delta;
+      const maxIndex = processesCache.length - 1;
+      const nextAbsolute = Math.max(0, Math.min(absoluteIndex, maxIndex));
+
+      if (nextAbsolute < processOffset) {
+        processOffset = nextAbsolute;
+        selectedIndex = 0;
+      } else if (nextAbsolute >= processOffset + MAX_ROWS) {
+        processOffset = nextAbsolute - MAX_ROWS + 1;
+        selectedIndex = MAX_ROWS - 1;
+      } else {
+        selectedIndex = nextAbsolute - processOffset;
+      }
+
+      clampSelection();
+      renderProcesses();
+    }
+
     async function tick(){
       document.getElementById("clock").textContent = new Date().toLocaleTimeString();
       try{
         const r = await fetch(`${API}/api/processes`, {cache:"no-store"});
         const j = await r.json();
-        const items = (j.items || []).slice(0, 14); // fit 640x480
-        const list = document.getElementById("list");
-
-        if(!items.length){
-          list.innerHTML = `<div class="row">No active processes.</div>`;
-          return;
+        const oldLen = processesCache.length;
+        processesCache = j.items || [];
+        const maxOffset = Math.max(0, processesCache.length - 1);
+        if (processOffset > maxOffset) {
+          processOffset = Math.max(0, processesCache.length - MAX_ROWS);
         }
-
-        list.innerHTML = items.map(p=>{
-          const cls = sev(p.connections || 0);
-          const pid = p.pid ?? "N/A";
-          const c = p.connections ?? 0;
-          const ips = p.unique_ips ?? 0;
-          return `<div class="row ${cls}">[${pid}] ${p.name} | conn=${c} | ips=${ips}</div>`;
-        }).join("");
+        if (!oldLen && processesCache.length) {
+          processOffset = 0;
+          selectedIndex = 0;
+        }
+        clampSelection();
+        renderProcesses();
       }catch(e){
         document.getElementById("list").innerHTML = `<div class="row bad">HOST OFFLINE</div>`;
       }
     }
+
+    window.deviceNav = {
+      onBack() { window.location.href = "index.html"; return true; },
+      onUp() { moveSelection(-1); return true; },
+      onDown() { moveSelection(1); return true; },
+      onSelect() { return true; },
+    };
 
     tick();
     setInterval(tick, 2000);

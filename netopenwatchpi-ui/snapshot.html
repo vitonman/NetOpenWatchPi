@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NetOpenWatchPi - Snapshot Analysis</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#07120a;--panel:#0a1b0f;--line:#173d22;--text:#99ff9f;--dim:#56b35f;--warn:#ffd34d;--bad:#ff5f5f;}
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:"VT323","Consolas",monospace}
+    body{padding:18px;background:radial-gradient(circle at center,#0a1d10 0%,#061009 100%)}
+    .shell{max-width:1480px;margin:0 auto;border:2px solid var(--line);padding:16px;position:relative}
+    .shell::before{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.14) 3px)}
+    .top{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);padding:8px 12px;color:var(--dim);font-size:34px}
+    .layout{margin-top:14px;display:grid;grid-template-columns:320px 1fr;gap:14px;min-height:78vh}
+    .panel{border:1px solid var(--line);background:rgba(10,27,15,.96);padding:12px;min-height:0}
+    .panel-title{font-size:30px;color:var(--dim);margin-bottom:10px}
+    .list{display:flex;flex-direction:column;gap:8px;max-height:calc(78vh - 90px);overflow:auto;padding-right:4px}
+    .snapshot-item{border:1px solid var(--line);padding:8px 10px;background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}
+    .snapshot-item.active{border-color:var(--text);color:var(--text)}
+    .snapshot-item .main{font-size:28px}
+    .snapshot-item .meta{font-size:24px;color:var(--dim)}
+    .filter{width:100%;border:1px solid var(--line);background:#08140b;color:var(--text);font:inherit;font-size:26px;padding:6px 8px;margin-bottom:10px}
+    .content{display:grid;grid-template-rows:auto auto 1fr auto;gap:14px}
+    .summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .stat{border:1px solid var(--line);padding:10px;background:#0a1b0f}
+    .stat .k{font-size:24px;color:var(--dim)}
+    .stat .v{font-size:44px;line-height:1}
+    .sections{display:grid;grid-template-columns:1fr 1.2fr;gap:14px}
+    .section{border:1px solid var(--line);padding:10px;background:#0a1b0f;min-height:180px}
+    .section h3{margin:0 0 10px 0;font-size:28px;color:var(--dim);font-weight:normal}
+    .row{font-size:24px;line-height:1.18;padding:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .warn{color:var(--warn)} .critical{color:var(--bad)} .info{color:var(--text)}
+    .proc-table{border:1px solid var(--line);padding:10px;background:#0a1b0f;min-height:260px}
+    .proc-header,.proc-row{display:grid;grid-template-columns:260px 80px 90px 90px 1fr;gap:10px;align-items:center}
+    .proc-header{font-size:24px;color:var(--dim);padding-bottom:6px;border-bottom:1px solid rgba(86,179,95,.18)}
+    .proc-row{font-size:23px;padding:6px 0;border-bottom:1px solid rgba(86,179,95,.10)}
+    .proc-row.active{background:rgba(153,255,159,.08)}
+    .muted{color:var(--dim)}
+    .empty{font-size:28px;color:var(--dim)}
+    .toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+    .toolbar .label{font-size:28px;color:var(--dim)}
+    .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .detail-card{border:1px solid var(--line);padding:10px;background:#0a1b0f}
+    .detail-card h3{margin:0 0 10px 0;font-size:28px;color:var(--dim);font-weight:normal}
+    .subsection{margin:12px 0 6px 0;font-size:24px;color:var(--dim)}
+    @media (max-width: 1100px){
+      .layout{grid-template-columns:1fr}
+      .summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .sections{grid-template-columns:1fr}
+      .detail-grid{grid-template-columns:1fr}
+      .proc-header,.proc-row{grid-template-columns:220px 70px 80px 80px 1fr}
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="top">
+      <div id="title">SNAPSHOT ANALYSIS</div>
+      <div id="clock">--:--:--</div>
+    </div>
+
+    <div class="layout">
+      <div class="panel">
+        <div class="panel-title">SNAPSHOTS</div>
+        <input id="snapshotFilter" class="filter" type="text" placeholder="Filter by file or timestamp" />
+        <div id="snapshotList" class="list"></div>
+      </div>
+
+      <div class="content">
+        <div id="summary" class="summary-grid"></div>
+
+        <div class="sections">
+          <div class="section">
+            <h3>Risk Summary</h3>
+            <div id="riskList"></div>
+          </div>
+          <div class="section">
+            <h3>Snapshot Info</h3>
+            <div id="metaList"></div>
+          </div>
+        </div>
+
+        <div class="proc-table">
+          <div class="toolbar">
+            <div class="label">Processes</div>
+            <input id="processFilter" class="filter" type="text" placeholder="Filter processes, IPs, endpoints" style="margin:0;max-width:420px" />
+          </div>
+          <div class="proc-header">
+            <div>Process</div>
+            <div>PID</div>
+            <div>Conn</div>
+            <div>unique_ips</div>
+            <div>remote_endpoints</div>
+          </div>
+          <div id="processList"></div>
+        </div>
+
+        <div class="detail-grid">
+          <div class="detail-card">
+            <h3 id="detailTitle">Process Detail</h3>
+            <div id="detailMeta"></div>
+          </div>
+          <div class="detail-card">
+            <h3>Endpoints</h3>
+            <div id="detailEndpoints"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = "http://192.168.0.54:8765";
+    const MAX_RISKS = 14;
+    let allSnapshots = [];
+    let currentSnapshot = null;
+    let selectedProcessKey = "";
+
+    function fileParam(){
+      return new URLSearchParams(window.location.search).get("file") || "";
+    }
+
+    function cls(sev){
+      const s = (sev || "INFO").toUpperCase();
+      if (s === "CRITICAL") return "critical";
+      if (s === "WARN") return "warn";
+      return "info";
+    }
+
+    function setClock(){
+      document.getElementById("clock").textContent = new Date().toLocaleTimeString();
+    }
+
+    function setQueryFile(file){
+      const url = new URL(window.location.href);
+      url.searchParams.set("file", file);
+      window.history.replaceState({}, "", url.toString());
+    }
+
+    async function fetchSnapshotList(){
+      const r = await fetch(`${API}/api/snapshots/list?limit=40`, { cache:"no-store" });
+      const j = await r.json();
+      allSnapshots = j.items || [];
+    }
+
+    async function fetchSnapshot(file){
+      const r = await fetch(`${API}/api/snapshots/get?file=${encodeURIComponent(file)}`, { cache:"no-store" });
+      const j = await r.json();
+      currentSnapshot = j.snapshot || null;
+      if (currentSnapshot) {
+        document.getElementById("title").textContent = `SNAPSHOT ANALYSIS | ${file}`;
+      }
+    }
+
+    function renderSnapshotList(){
+      const filter = (document.getElementById("snapshotFilter").value || "").toLowerCase();
+      const activeFile = fileParam();
+      const items = allSnapshots.filter((item) => {
+        const hay = `${item.filename || ""} ${item.label || ""}`.toLowerCase();
+        return !filter || hay.includes(filter);
+      });
+
+      const root = document.getElementById("snapshotList");
+      if (!items.length) {
+        root.innerHTML = `<div class="empty">No snapshots found.</div>`;
+        return;
+      }
+
+      root.innerHTML = items.map((item) => `
+        <button type="button" class="snapshot-item ${item.filename === activeFile ? "active" : ""}" data-file="${item.filename}">
+          <div class="main">${item.label || item.filename}</div>
+          <div class="meta">PROC ${item.processes_with_network || 0} | CONN ${item.connections_total || 0} | RISK ${item.risk_total || 0}</div>
+        </button>
+      `).join("");
+    }
+
+    function renderSummary(){
+      const totals = currentSnapshot?.totals || {};
+      document.getElementById("summary").innerHTML = [
+        ["Processes", totals.processes_with_network || 0],
+        ["Connections", totals.connections_total || 0],
+        ["Established", totals.established_total || 0],
+        ["Risks", totals.risk_total || 0],
+      ].map(([k,v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+    }
+
+    function renderMeta(){
+      const s = currentSnapshot || {};
+      const totals = s.totals || {};
+      document.getElementById("metaList").innerHTML = [
+        `<div class="subsection">snapshot</div>`,
+        `<div class="row info">created ${s.label || "--"}</div>`,
+        `<div class="row info">host ${s.system?.hostname || "--"}</div>`,
+        `<div class="subsection">alerts</div>`,
+        `<div class="row info">active ${totals.active_alert_total || 0}</div>`,
+        `<div class="row critical">active_critical ${totals.active_critical_total || 0}</div>`,
+        `<div class="row warn">active_warn ${totals.active_warn_total || 0}</div>`,
+        `<div class="row critical">critical ${totals.risk_critical || 0}</div>`,
+        `<div class="row warn">warn ${totals.risk_warn || 0}</div>`,
+        `<div class="subsection">network</div>`,
+        `<div class="row info">processes ${totals.processes_with_network || 0}</div>`,
+        `<div class="row info">connections ${totals.connections_total || 0}</div>`,
+        `<div class="row info">unique_ips ${totals.unique_ips_total || 0}</div>`,
+        `<div class="row info">remote_endpoints ${totals.remote_endpoints_total || 0}</div>`,
+      ].join("");
+    }
+
+    function renderRisks(){
+      const activeAlerts = (currentSnapshot?.active_alerts || []).slice(0, 8);
+      const risks = (currentSnapshot?.risks || []).slice(0, MAX_RISKS);
+      const root = document.getElementById("riskList");
+      if (!risks.length && !activeAlerts.length){
+        root.innerHTML = `<div class="empty">No risks in this snapshot.</div>`;
+        return;
+      }
+
+      root.innerHTML = [
+        `<div class="subsection">active_alerts</div>`,
+        ...(activeAlerts.length
+          ? activeAlerts.map((a) => `<div class="row ${cls(a.severity)}">[${a.severity}] ${a.process} | ${a.type || "alert"} | ${a.reason || "-"}</div>`)
+          : [`<div class="row muted">-</div>`]),
+        `<div class="subsection">current_risks</div>`,
+        ...(risks.length
+          ? risks.map((r) => `<div class="row ${cls(r.severity)}">[${r.severity}] ${r.process} | conn=${r.connections || 0} | ips=${r.risky_ips_count || 0} | ${r.top_reason || ""}</div>`)
+          : [`<div class="row muted">-</div>`]),
+      ].join("");
+    }
+
+    function renderProcesses(){
+      const filter = (document.getElementById("processFilter").value || "").toLowerCase();
+      const processes = (currentSnapshot?.processes || []).filter((p) => {
+        const hay = [
+          p.name,
+          p.pid,
+          ...(p.unique_ips || []),
+          ...(p.remote_endpoints || []),
+        ].join(" ").toLowerCase();
+        return !filter || hay.includes(filter);
+      });
+
+      const root = document.getElementById("processList");
+      if (!processes.length){
+        root.innerHTML = `<div class="empty" style="padding-top:12px">No matching processes.</div>`;
+        renderProcessDetail(null);
+        return;
+      }
+
+      if (!selectedProcessKey || !processes.some((p) => `${p.pid}|${p.name}` === selectedProcessKey)) {
+        selectedProcessKey = `${processes[0].pid}|${processes[0].name}`;
+      }
+
+      root.innerHTML = processes.map((p) => {
+        const key = `${p.pid}|${p.name}`;
+        const endpoints = (p.remote_endpoints || []).slice(0, 3).join(", ") || "-";
+        return `
+          <div class="proc-row ${key === selectedProcessKey ? "active" : ""}" data-proc-key="${key}">
+            <div>${p.name}</div>
+            <div>${p.pid ?? "N/A"}</div>
+            <div>${p.connections || 0}</div>
+            <div>${p.unique_ips_count || 0}</div>
+            <div class="muted">${endpoints}</div>
+          </div>
+        `;
+      }).join("");
+
+      const active = processes.find((p) => `${p.pid}|${p.name}` === selectedProcessKey) || processes[0];
+      renderProcessDetail(active);
+    }
+
+    function renderProcessDetail(proc){
+      const metaRoot = document.getElementById("detailMeta");
+      const endpointsRoot = document.getElementById("detailEndpoints");
+      const title = document.getElementById("detailTitle");
+
+      if (!proc){
+        title.textContent = "Process Detail";
+        metaRoot.innerHTML = `<div class="empty">No process selected.</div>`;
+        endpointsRoot.innerHTML = "";
+        return;
+      }
+
+      title.textContent = `${proc.name} [${proc.pid ?? "N/A"}]`;
+
+      const states = Object.entries(proc.states || {}).map(([k, v]) => `${k}=${v}`).join(" | ") || "-";
+      const protocols = Object.entries(proc.protocols || {}).map(([k, v]) => `${k}=${v}`).join(" | ") || "-";
+      const uniqueIps = (proc.unique_ips || []).slice(0, 8);
+      const remoteEndpoints = (proc.remote_endpoints || []).slice(0, 10);
+      const localEndpoints = (proc.local_endpoints || []).slice(0, 6);
+
+      metaRoot.innerHTML = [
+        `<div class="row info">connections: ${proc.connections || 0}</div>`,
+        `<div class="row info">unique_ips: ${proc.unique_ips_count || 0}</div>`,
+        `<div class="row info">established: ${proc.established || 0}</div>`,
+        `<div class="row info">protocols: ${protocols}</div>`,
+        `<div class="row info">states: ${states}</div>`,
+        `<div class="subsection">unique_ips</div>`,
+        ...(uniqueIps.length ? uniqueIps.map((ip) => `<div class="row info">${ip}</div>`) : [`<div class="row muted">-</div>`]),
+      ].join("");
+
+      endpointsRoot.innerHTML = [
+        `<div class="subsection">remote_endpoints</div>`,
+        ...(remoteEndpoints.length ? remoteEndpoints.map((ep) => `<div class="row info">${ep}</div>`) : [`<div class="row muted">-</div>`]),
+        `<div class="subsection">local_endpoints</div>`,
+        ...(localEndpoints.length ? localEndpoints.map((ep) => `<div class="row info">${ep}</div>`) : [`<div class="row muted">-</div>`]),
+      ].join("");
+    }
+
+    function renderAll(){
+      if (!currentSnapshot){
+        document.getElementById("summary").innerHTML = `<div class="empty">Snapshot not loaded.</div>`;
+        document.getElementById("riskList").innerHTML = "";
+        document.getElementById("metaList").innerHTML = "";
+        document.getElementById("processList").innerHTML = "";
+        renderProcessDetail(null);
+        return;
+      }
+      renderSummary();
+      renderMeta();
+      renderRisks();
+      renderProcesses();
+    }
+
+    async function selectSnapshot(file){
+      if (!file) return;
+      setQueryFile(file);
+      await fetchSnapshot(file);
+      renderSnapshotList();
+      renderAll();
+    }
+
+    async function bootstrap(){
+      setClock();
+      await fetchSnapshotList();
+      renderSnapshotList();
+
+      let file = fileParam();
+      if (!file && allSnapshots.length) {
+        file = allSnapshots[0].filename;
+      }
+
+      if (file) {
+        await selectSnapshot(file);
+      } else {
+        renderAll();
+      }
+    }
+
+    document.getElementById("snapshotList").addEventListener("click", async (e) => {
+      const el = e.target.closest("[data-file]");
+      if (!el) return;
+      selectedProcessKey = "";
+      await selectSnapshot(el.dataset.file);
+    });
+
+    document.getElementById("snapshotFilter").addEventListener("input", renderSnapshotList);
+    document.getElementById("processFilter").addEventListener("input", renderProcesses);
+    document.getElementById("processList").addEventListener("click", (e) => {
+      const el = e.target.closest("[data-proc-key]");
+      if (!el) return;
+      selectedProcessKey = el.dataset.procKey;
+      renderProcesses();
+    });
+
+    bootstrap();
+    setInterval(setClock, 1000);
+  </script>
+</body>
+</html>

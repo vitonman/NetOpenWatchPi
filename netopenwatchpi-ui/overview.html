@@ -246,8 +246,15 @@
     </div>
   </div>
 
+  <script src="nav.js"></script>
   <script>
     const API = "http://192.168.0.54:8765";
+    window.deviceNav = {
+      onBack() { window.location.href = "index.html"; return true; },
+      onUp() { return true; },
+      onDown() { return true; },
+      onSelect() { return true; },
+    };
 
     function sevClass(p){
       if (p == null) return "ok";
