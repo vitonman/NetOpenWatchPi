@@ -96,10 +96,18 @@
       min-height:0;
     }
 
-    .label{ color:var(--dim); font-size:18px; }
+    .label{ color:var(--dim); font-size:20px; }
     .value{ margin-top:4px; font-size:40px; line-height:1; text-shadow:0 0 8px rgba(120,255,140,.25); }
-    .meta{ margin-top:4px; font-size:16px; color:var(--dim); line-height:1.05; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .line{ font-size:17px; color:var(--dim); line-height:1.12; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .meta{ margin-top:4px; font-size:18px; color:var(--dim); line-height:1.05; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .line{ font-size:18px; color:var(--dim); line-height:1.12; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .hero-pair{
+      margin-top:6px;
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:8px;
+      align-items:end;
+    }
+    .hero .value{ margin-top:0; }
 
     .ok{ color:var(--text); }
     .warn{ color:var(--warn); }
@@ -139,27 +147,37 @@
       <div class="layout">
         <div class="left">
           <div class="card">
-            <div class="label">CPU</div>
-            <div id="cpu" class="value">--</div>
-            <div id="cpu_name" class="meta">--</div>
-            <div id="cpu_meta" class="line">TEMP -- | FREQ --</div>
-            <div id="cpu_threads" class="line">CORES -- | THREADS --</div>
+            <div id="cpu_name" class="label">CPU</div>
+            <div class="hero-pair">
+              <div class="hero">
+                <div id="cpu" class="value">--</div>
+              </div>
+              <div class="hero">
+                <div id="cpu_temp" class="value">--</div>
+              </div>
+            </div>
+            <div id="cpu_meta" class="line">FREQ --</div>
           </div>
 
           <div class="card">
             <div class="label">MEMORY</div>
             <div id="ram" class="value">--</div>
             <div id="ram_meta" class="meta">-- / -- MB</div>
-            <div id="swap_meta" class="line">SWAP -- / -- MB</div>
           </div>
         </div>
 
         <div class="right">
           <div class="card">
-            <div class="label">GPU</div>
-            <div id="gpu_name" class="line">--</div>
-            <div id="gpu_usage" class="value">--</div>
-            <div id="gpu_meta" class="meta">VRAM -- | TEMP --</div>
+            <div id="gpu_name" class="label">GPU</div>
+            <div class="hero-pair">
+              <div class="hero">
+                <div id="gpu_usage" class="value">--</div>
+              </div>
+              <div class="hero">
+                <div id="gpu_temp" class="value">--</div>
+              </div>
+            </div>
+            <div id="gpu_meta" class="line">VRAM --</div>
           </div>
 
           <div class="card">
@@ -167,11 +185,11 @@
             <div class="dual">
               <div>
                 <div id="net_rx" class="value">--</div>
-                <div class="meta">RECV</div>
+                <div class="label">RECV</div>
               </div>
               <div>
                 <div id="net_tx" class="value">--</div>
-                <div class="meta">SENT</div>
+                <div class="label">SENT</div>
               </div>
             </div>
           </div>
@@ -180,7 +198,6 @@
             <div class="label">STORAGE</div>
             <div id="disk0" class="line">--</div>
             <div id="disk1" class="line">--</div>
-            <div id="net_packets" class="line">PKT -- / --</div>
           </div>
         </div>
       </div>
@@ -234,26 +251,24 @@
         gpuEl.textContent = gpuUse == null ? "N/A" : `${gpuUse.toFixed(0)}%`;
 
         document.getElementById("cpu_name").textContent = j.metrics?.cpu_name || "Unknown CPU";
-        document.getElementById("cpu_meta").textContent = `TEMP ${j.metrics?.cpu_temp_c ?? "--"} C | FREQ ${j.metrics?.cpu_mhz ?? "--"} MHz`;
-        document.getElementById("cpu_threads").textContent = `CORES ${j.metrics?.cpu_cores ?? "--"} | THREADS ${j.metrics?.cpu_threads ?? "--"}`;
+        document.getElementById("cpu_temp").textContent = j.metrics?.cpu_temp_c == null ? "--" : `${j.metrics.cpu_temp_c}C`;
+        document.getElementById("cpu_meta").textContent = `FREQ ${j.metrics?.cpu_mhz ?? "--"} MHz`;
 
         document.getElementById("ram_meta").textContent = `${j.metrics?.ram_used_mb ?? "--"} / ${j.metrics?.ram_total_mb ?? "--"} MB`;
-        document.getElementById("swap_meta").textContent = `SWAP ${j.swap?.used_mb ?? "--"} / ${j.swap?.total_mb ?? "--"} MB`;
 
         document.getElementById("gpu_name").textContent = j.gpu?.name || "N/A";
+        document.getElementById("gpu_temp").textContent = j.metrics?.gpu_temp_c == null ? "--" : `${j.metrics.gpu_temp_c}C`;
         document.getElementById("gpu_meta").textContent =
-          `VRAM ${j.gpu?.memory_used_mb ?? "--"} / ${j.gpu?.memory_total_mb ?? "--"} MB | TEMP ${j.metrics?.gpu_temp_c ?? "--"} C`;
+          `VRAM ${j.gpu?.memory_used_mb ?? "--"} / ${j.gpu?.memory_total_mb ?? "--"} MB`;
 
         document.getElementById("net_rx").textContent = mb(j.network?.bytes_recv);
         document.getElementById("net_tx").textContent = mb(j.network?.bytes_sent);
-        document.getElementById("net_packets").textContent =
-          `PKT RX ${j.network?.packets_recv ?? "--"} | TX ${j.network?.packets_sent ?? "--"}`;
 
         const disks = j.disk?.items || [];
         const fmtDisk = (d) => {
           if (!d) return "--";
           const label = d.mountpoint || d.device || "disk";
-          return `${label} ${d.used_gb ?? "--"}/${d.total_gb ?? "--"} GB ${d.percent ?? "--"}%`;
+          return `${label} ${d.used_gb ?? "--"}/${d.total_gb ?? "--"} GB`;
         };
         document.getElementById("disk0").textContent = fmtDisk(disks[0]);
         document.getElementById("disk1").textContent = fmtDisk(disks[1]);
