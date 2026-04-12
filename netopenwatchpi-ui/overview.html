@@ -41,7 +41,7 @@
       height:100%;
       border:2px solid var(--line);
       box-shadow: inset 0 0 40px rgba(80,255,120,.08);
-      background: radial-gradient(circle at center, oklch(20.995% 0.03606 152.434) 0%, #061009 100%);
+      background: radial-gradient(circle at center, #0a1d10 0%, #061009 100%);
       padding:10px;
     }
 
@@ -94,12 +94,47 @@
       padding:8px;
       overflow:hidden;
       min-height:0;
+      position:relative;
     }
 
-    .label{ color:var(--dim); font-size:30px; background-color: rgba(32, 74, 32, 0.584); }
-    .value{ margin-top:4px; font-size:40px; line-height:1; text-shadow:0 0 8px rgba(120,255,140,.25); background-color: rgba(0, 200, 255, 0.236);}
+    .card::before{
+      content:"";
+      position:absolute;
+      left:8px;
+      right:8px;
+      top:0;
+      height:1px;
+      background:linear-gradient(
+        to right,
+        rgba(153,255,159,.18),
+        rgba(153,255,159,.04)
+      );
+    }
+
+    .label{
+      color:var(--dim);
+      font-size:26px;
+      letter-spacing:.3px;
+    }
+    .value{
+      margin-top:4px;
+      font-size:40px;
+      line-height:1;
+      color:var(--text);
+      text-shadow:0 0 6px rgba(120,255,140,.18);
+    }
     .meta{ margin-top:4px; font-size:30px; color:var(--dim); line-height:1.05; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .line{ margin-top:4px; font-size:24px; color:var(--dim); line-height:1.12; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; background-color: rgba(255, 255, 0, 0.192);}
+    .line{
+      margin-top:6px;
+      padding-top:4px;
+      font-size:22px;
+      color:#6ec275;
+      line-height:1.12;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      border-top:1px solid rgba(86,179,95,.18);
+    }
     .hero-pair{
       margin-top:6px;
       display:grid;
@@ -122,16 +157,16 @@
 
     .footer{
       margin-top:8px;
-      height:38px;
+      height:42px;
       border:1px solid var(--line);
       display:flex;
       align-items:center;
       justify-content:space-around;
       color:var(--dim);
-      font-size:20px;
+      font-size:24px;
     }
 
-    .tab{ border:1px solid var(--line); padding:2px 8px; }
+    .tab{ border:1px solid var(--line); padding:1px 8px; }
     .active{ color:var(--text); border-color:var(--text); }
     a{ color:inherit; text-decoration:none; }
   </style>

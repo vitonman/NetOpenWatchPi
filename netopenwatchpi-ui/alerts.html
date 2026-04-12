@@ -15,11 +15,11 @@
     .screen{position:relative;width:100%;height:100%;border:2px solid var(--line);background:radial-gradient(circle at center,#0a1d10 0%,#061009 100%);padding:10px}
     .screen::before{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.18) 3px)}
     .top{height:38px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 8px;color:var(--dim);font-size:24px}
-    .body{margin-top:8px;height:290px;display:grid;grid-template-columns:220px 1fr;gap:8px}
+    .body{margin-top:8px;height:331px;display:grid;grid-template-columns:220px 1fr;gap:8px}
     .pane{border:1px solid var(--line);background:var(--panel);padding:6px;overflow:hidden}
-    .mode-btn{display:block;width:100%;margin-bottom:6px;border:1px solid var(--line);background:transparent;color:var(--dim);font:inherit;font-size:20px;padding:4px;text-align:left}
+    .mode-btn{display:block;width:100%;margin-bottom:6px;border:1px solid var(--line);background:transparent;color:var(--dim);font:inherit;font-size:24px;padding:3px 4px;text-align:left}
     .mode-btn.active{color:var(--text);border-color:var(--text)}
-    .line{font-size:19px;line-height:1.2;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .line{font-size:22px;line-height:1.15;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .info{color:var(--text)} .warn{color:var(--warn)} .critical{color:var(--bad)}
     .line.new-alert{
       position:relative;
@@ -50,8 +50,8 @@
       35%{opacity:.9;filter:brightness(1.2)}
       100%{opacity:0;filter:none}
     }
-    .footer{margin-top:8px;height:38px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-around;color:var(--dim);font-size:20px}
-    .tab{border:1px solid var(--line);padding:2px 8px}
+    .footer{margin-top:8px;height:42px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-around;color:var(--dim);font-size:24px}
+    .tab{border:1px solid var(--line);padding:1px 8px}
     .active-tab{color:var(--text);border-color:var(--text)}
     a{color:inherit;text-decoration:none}
   </style>
@@ -348,4 +348,3 @@
 
 </body>
 </html>
-
