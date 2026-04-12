@@ -26,16 +26,206 @@ class MonitorApp:
         self.last_top_processes = []
         self.api_host = "0.0.0.0"
         self.api_port = 8765
+        self.monitor_interval_sec = 2
+        self.current_processes = {}
+        self.live_feed = []
+        self.live_feed_seen = set()
+        self.live_feed_limit = 40
+        self.live_feed_ttl_sec = 300
+        self.live_feed_revision = 0
+        self.risk_memory = {}
+        self.risk_ttl_sec = 90
      
 
     def background_monitor(self):
         """Silent background thread"""
         while self.running:
             try:
-                self.collector.collect_network_data()
+                now = time.time()
+                processes = self.collector.collect_network_data()
+                self.current_processes = processes
+                alerts = self.alert_manager.check_anomalies(processes)
+                self._store_live_alerts(alerts, now=now)
+                self._refresh_risks_snapshot(processes=processes, now=now)
             except Exception:
                 pass
-            time.sleep(2)
+            time.sleep(self.monitor_interval_sec)
+
+    def _store_live_alerts(self, new_items, now=None):
+        """Update in-memory live alert feed from freshly detected items."""
+        now = now if isinstance(now, (int, float)) else time.time()
+
+        for item in new_items:
+            if not isinstance(item, dict):
+                continue
+
+            key = item.get("event_key") or (
+                f"{item.get('type')}|{item.get('process')}|{item.get('pid')}|"
+                f"{item.get('remote_ip')}|{item.get('remote_port')}|{item.get('ts')}"
+            )
+            if key in self.live_feed_seen:
+                continue
+
+            self.live_feed_revision += 1
+            item["_rev"] = self.live_feed_revision
+            self.live_feed_seen.add(key)
+            self.live_feed.append(item)
+
+        fresh_items = []
+        fresh_seen = set()
+
+        for item in self.live_feed:
+            ts = item.get("ts", now)
+            if not isinstance(ts, (int, float)):
+                continue
+            if (now - ts) > self.live_feed_ttl_sec:
+                continue
+
+            key = item.get("event_key") or (
+                f"{item.get('type')}|{item.get('process')}|{item.get('pid')}|"
+                f"{item.get('remote_ip')}|{item.get('remote_port')}|{item.get('ts')}"
+            )
+            if key in fresh_seen:
+                continue
+
+            fresh_seen.add(key)
+            fresh_items.append(item)
+
+        fresh_items.sort(key=lambda x: x.get("ts", 0), reverse=True)
+        self.live_feed = fresh_items[: self.live_feed_limit]
+        self.live_feed_seen = {
+            item.get("event_key")
+            or (
+                f"{item.get('type')}|{item.get('process')}|{item.get('pid')}|"
+                f"{item.get('remote_ip')}|{item.get('remote_port')}|{item.get('ts')}"
+            )
+            for item in self.live_feed
+        }
+
+    def build_live_alerts_feed(self, since_rev=None):
+        """Return recent live alerts already collected by background monitoring."""
+        self._store_live_alerts([], now=time.time())
+        items = list(self.live_feed)
+        if isinstance(since_rev, int) and since_rev > 0:
+            items = [item for item in items if item.get("_rev", 0) > since_rev]
+        return {
+            "revision": self.live_feed_revision,
+            "items": items,
+        }
+
+    def _refresh_risks_snapshot(self, processes=None, now=None):
+        from core.threat_engine import threat_engine
+        import psutil
+
+        now = now if isinstance(now, (int, float)) else time.time()
+        processes = processes if isinstance(processes, dict) else self.current_processes or self.collector.collect_network_data()
+        current_risks = {}
+        severity_rank = {"INFO": 1, "WARN": 2, "CRITICAL": 3}
+        noisy_processes = {"System Idle Process", "System"}
+
+        for conn in psutil.net_connections(kind="inet4"):
+            if conn.pid is None:
+                continue
+
+            try:
+                name = psutil.Process(conn.pid).name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+            if name in noisy_processes:
+                continue
+
+            remote_ip = getattr(conn.raddr, "ip", None) if conn.raddr else None
+            remote_port = getattr(conn.raddr, "port", None) if conn.raddr else None
+
+            flags = threat_engine.analyze_connection(name, remote_ip, remote_port)
+            if not flags:
+                continue
+
+            severity = "INFO"
+            reason = flags[0]["reason"]
+
+            for f in flags:
+                if f["severity"] == "CRITICAL":
+                    severity = "CRITICAL"
+                    reason = f["reason"]
+                    break
+                elif f["severity"] == "WARN" and severity != "CRITICAL":
+                    severity = "WARN"
+                    reason = f["reason"]
+
+            if severity == "INFO":
+                continue
+
+            proc_key = (conn.pid, name)
+            process_data = processes.get(name, {})
+            item = current_risks.get(proc_key)
+            if item is None:
+                item = {
+                    "process": name,
+                    "pid": conn.pid,
+                    "connections": process_data.get("connections", 0),
+                    "severity": severity,
+                    "risk_count": 0,
+                    "risky_ips": set(),
+                    "top_reason": reason,
+                    "last_seen_ts": now,
+                }
+                current_risks[proc_key] = item
+
+            item["connections"] = process_data.get("connections", item["connections"])
+            item["risk_count"] += 1
+            item["last_seen_ts"] = now
+
+            if remote_ip:
+                item["risky_ips"].add(remote_ip)
+
+            if severity_rank[severity] > severity_rank[item["severity"]]:
+                item["severity"] = severity
+                item["top_reason"] = reason
+            elif severity == item["severity"] and item["top_reason"] == "NORMAL":
+                item["top_reason"] = reason
+
+        # Refresh session memory with current risks and keep recent ones for a short time
+        for proc_key, item in current_risks.items():
+            self.risk_memory[proc_key] = item
+
+        expired = []
+        for proc_key, item in self.risk_memory.items():
+            if (now - item.get("last_seen_ts", now)) > self.risk_ttl_sec:
+                expired.append(proc_key)
+
+        for proc_key in expired:
+            self.risk_memory.pop(proc_key, None)
+
+    def build_risks_snapshot(self):
+        self._refresh_risks_snapshot(now=time.time())
+        items = []
+        for item in self.risk_memory.values():
+            items.append(
+                {
+                    "process": item["process"],
+                    "pid": item["pid"],
+                    "connections": item["connections"],
+                    "severity": item["severity"],
+                    "risk_count": item["risk_count"],
+                    "risky_ips_count": len(item["risky_ips"]),
+                    "top_reason": item["top_reason"],
+                    "last_seen_ts": item["last_seen_ts"],
+                }
+            )
+
+        items.sort(
+            key=lambda x: (
+                severity_rank.get(x["severity"], 0),
+                x["connections"],
+                x["risk_count"],
+                x["last_seen_ts"],
+            ),
+            reverse=True,
+        )
+        return items
+
 
     def start_api(self):
         """Start HTTP API in a background daemon thread using shared app state."""

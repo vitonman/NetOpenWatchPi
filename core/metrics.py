@@ -14,6 +14,29 @@ import psutil
 class SystemMetrics:
     """Main class responsible for collecting all system information."""
 
+    def _get_cpu_name(self) -> str:
+        """Return a human-readable CPU name when available."""
+        if platform.system() == "Windows":
+            out = self._run_command(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_Processor | Select-Object -ExpandProperty Name",
+                ],
+                timeout=4,
+            )
+            if out:
+                line = out.splitlines()[0].strip()
+                if line:
+                    return line
+
+        processor = (platform.processor() or "").strip()
+        if processor:
+            return processor
+
+        return "Unknown CPU"
+
     def get_cpu_temperature(self) -> Optional[float]:
         """Returns CPU temperature or None if not available."""
         system = platform.system()
@@ -67,7 +90,7 @@ class SystemMetrics:
             "os_version": platform.version(),
             "hostname": platform.node(),
             "machine": platform.machine(),
-            "processor": platform.processor(),
+            "processor": self._get_cpu_name(),
             "python_version": platform.python_version(),
             "boot_time": boot_ts,
             "uptime_sec": int(time.time() - boot_ts),

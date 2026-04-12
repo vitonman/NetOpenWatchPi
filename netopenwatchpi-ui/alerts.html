@@ -21,6 +21,35 @@
     .mode-btn.active{color:var(--text);border-color:var(--text)}
     .line{font-size:19px;line-height:1.2;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .info{color:var(--text)} .warn{color:var(--warn)} .critical{color:var(--bad)}
+    .line.new-alert{
+      position:relative;
+      padding-left:10px;
+    }
+    .line.new-alert::before{
+      content:"";
+      position:absolute;
+      left:0;
+      top:2px;
+      bottom:2px;
+      width:3px;
+      pointer-events:none;
+      opacity:0;
+      animation:alertMarker 1s ease-out forwards;
+    }
+    .line.info.new-alert::before{
+      background:#99ff9f;
+    }
+    .line.warn.new-alert::before{
+      background:#ffd34d;
+    }
+    .line.critical.new-alert::before{
+      background:#ff5f5f;
+    }
+    @keyframes alertMarker{
+      0%{opacity:1;filter:brightness(1.8)}
+      35%{opacity:.9;filter:brightness(1.2)}
+      100%{opacity:0;filter:none}
+    }
     .footer{margin-top:8px;height:38px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-around;color:var(--dim);font-size:20px}
     .tab{border:1px solid var(--line);padding:2px 8px}
     .active-tab{color:var(--text);border-color:var(--text)}
@@ -37,11 +66,11 @@
 
       <div class="body">
         <div class="pane">
-          <button class="mode-btn active" data-mode="stats">STATS</button>
-          <button class="mode-btn" data-mode="live">LIVE</button>
-          <button class="mode-btn" data-mode="check">CHECK</button>
-          <button class="mode-btn" data-mode="network">NETWORK</button>
-          <button class="mode-btn" data-mode="logs">LOGS</button>
+          <button type="button" class="mode-btn active" data-mode="stats">STATS</button>
+          <button type="button" class="mode-btn" data-mode="live">LIVE</button>
+          <button type="button" class="mode-btn" data-mode="check">CHECK</button>
+          <button type="button" class="mode-btn" data-mode="risks">RISKS</button>
+          <button type="button" class="mode-btn" data-mode="logs">LOGS</button>
         </div>
         <div class="pane" id="content"></div>
       </div>
@@ -58,12 +87,15 @@
   const API = "http://192.168.0.54:8765";
   const POLL_MS = 2000;
   const MAX_ROWS = 12;
+  const MODE_STORAGE_KEY = "netopenwatchpi_alerts_mode";
+  const VALID_MODES = new Set(["stats", "live", "check", "risks", "logs"]);
 
   let mode = "stats";
   let timer = null;
-
-  let liveFeed = [];
-  const liveSeen = new Set();
+  let lastLiveKeys = new Set();
+  let liveRevision = 0;
+  let tickInFlight = false;
+  let modeEpoch = 0;
 
   function cls(sev) {
     const s = (sev || "INFO").toUpperCase();
@@ -72,8 +104,43 @@
     return "info";
   }
 
-  function setMode(next) {
+  function resolveInitialMode() {
+    const hashMode = window.location.hash.replace("#", "").toLowerCase();
+    if (VALID_MODES.has(hashMode)) {
+      return hashMode;
+    }
+
+    const storedMode = (localStorage.getItem(MODE_STORAGE_KEY) || "").toLowerCase();
+    if (VALID_MODES.has(storedMode)) {
+      return storedMode;
+    }
+
+    return "stats";
+  }
+
+  function getModePollInterval(selectedMode) {
+    if (selectedMode === "check") {
+      return 0;
+    }
+    return POLL_MS;
+  }
+
+  function setMode(next, syncHash = true) {
+    if (!VALID_MODES.has(next)) {
+      next = "stats";
+    }
+
     mode = next;
+    modeEpoch += 1;
+    if (mode !== "live") {
+      lastLiveKeys = new Set();
+      liveRevision = 0;
+    }
+    localStorage.setItem(MODE_STORAGE_KEY, next);
+    if (syncHash && window.location.hash !== `#${next}`) {
+      window.location.hash = next;
+    }
+
     document.getElementById("title").textContent = `ALERTS | ${next.toUpperCase()}`;
     document.querySelectorAll(".mode-btn").forEach((b) => {
       b.classList.toggle("active", b.dataset.mode === next);
@@ -81,7 +148,12 @@
 
     if (timer) clearInterval(timer);
     tick();
-    timer = setInterval(tick, POLL_MS);
+    const interval = getModePollInterval(next);
+    if (interval > 0) {
+      timer = setInterval(tick, interval);
+    } else {
+      timer = null;
+    }
   }
 
   function renderLines(lines) {
@@ -93,9 +165,69 @@
     c.innerHTML = lines.join("");
   }
 
-  async function fetchStats() {
+  function liveKeyOf(item) {
+    return item.event_key || `${item.type || ""}|${item.process || ""}|${item.pid || ""}|${item.remote_ip || ""}|${item.remote_port || ""}|${item.ts || ""}`;
+  }
+
+  function liveRowHtml(a, isNew = false) {
+    const t = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "--:--:--";
+    const ip = a.remote_ip ? ` ip=${a.remote_ip}` : "";
+    const port = a.remote_port ? ` port=${a.remote_port}` : "";
+    const extraClass = isNew ? " new-alert" : "";
+    return `<div class="line ${cls(a.severity)}${extraClass}" data-live-key="${liveKeyOf(a)}">[${a.severity || "INFO"}] [${t}] ${a.type || "event"} -> ${a.process || "N/A"}${ip}${port}</div>`;
+  }
+
+  function renderLiveInitial(items) {
+    const content = document.getElementById("content");
+
+    if (!items.length) {
+      lastLiveKeys = new Set();
+      content.innerHTML = `<div class="line info">No data.</div>`;
+      return;
+    }
+
+    content.innerHTML = items.map((item) => liveRowHtml(item, false)).join("");
+    lastLiveKeys = new Set(items.map(liveKeyOf));
+  }
+
+  function appendNewLiveItems(items) {
+    const content = document.getElementById("content");
+    const placeholder = content.querySelector(".line.info");
+    if (placeholder && placeholder.textContent === "No data.") {
+      content.innerHTML = "";
+    }
+
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      const key = liveKeyOf(item);
+      if (lastLiveKeys.has(key)) {
+        continue;
+      }
+
+      content.insertAdjacentHTML("afterbegin", liveRowHtml(item, true));
+      lastLiveKeys.add(key);
+    }
+
+    while (content.querySelectorAll("[data-live-key]").length > MAX_ROWS) {
+      const rows = content.querySelectorAll("[data-live-key]");
+      const lastRow = rows[rows.length - 1];
+      if (lastRow) {
+        lastLiveKeys.delete(lastRow.dataset.liveKey);
+        lastRow.remove();
+      } else {
+        break;
+      }
+    }
+
+    if (!content.querySelector("[data-live-key]")) {
+      content.innerHTML = `<div class="line info">No data.</div>`;
+    }
+  }
+
+  async function fetchStats(epoch) {
     const r = await fetch(`${API}/api/alerts/stats`, { cache: "no-store" });
     const j = await r.json();
+    if (epoch !== modeEpoch || mode !== "stats") return;
     const h = j.stats?.last_hour || {};
     const d = j.stats?.last_day || {};
 
@@ -108,35 +240,32 @@
     ]);
   }
 
-  async function fetchLive() {
-    const r = await fetch(`${API}/api/alerts/live`, { cache: "no-store" });
+  async function fetchLive(epoch) {
+    const url = liveRevision > 0
+      ? `${API}/api/alerts/live?since_rev=${liveRevision}`
+      : `${API}/api/alerts/live`;
+    const r = await fetch(url, { cache: "no-store" });
     const j = await r.json();
-    const incoming = (j.items || []).sort((a, b) => (a.ts || 0) - (b.ts || 0)); // old -> new
+    if (epoch !== modeEpoch || mode !== "live") return;
 
-    for (const a of incoming) {
-      const key =
-        a.event_key ||
-        `${a.type}|${a.process}|${a.pid}|${a.remote_ip}|${a.remote_port}|${a.ts}`;
-      if (liveSeen.has(key)) continue;
-      liveSeen.add(key);
-      liveFeed.unshift(a); // newest on top
+    const items = j.items || [];
+    const revision = Number(j.revision || 0);
+
+    if (liveRevision === 0) {
+      renderLiveInitial(items.slice(0, MAX_ROWS));
+    } else if (items.length) {
+      appendNewLiveItems(items);
     }
 
-    liveFeed = liveFeed.slice(0, MAX_ROWS);
-
-    renderLines(
-      liveFeed.map((a) => {
-        const t = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "--:--:--";
-        const ip = a.remote_ip ? ` ip=${a.remote_ip}` : "";
-        const port = a.remote_port ? ` port=${a.remote_port}` : "";
-        return `<div class="line ${cls(a.severity)}">[${a.severity || "INFO"}] [${t}] ${a.type || "event"} -> ${a.process || "N/A"}${ip}${port}</div>`;
-      })
-    );
+    if (revision > liveRevision) {
+      liveRevision = revision;
+    }
   }
 
-  async function fetchCheck() {
+  async function fetchCheck(epoch) {
     const r = await fetch(`${API}/api/alerts/check`, { cache: "no-store" });
     const j = await r.json();
+    if (epoch !== modeEpoch || mode !== "check") return;
     const items = (j.items || [])
       .sort((a, b) => (b.ts || 0) - (a.ts || 0))
       .slice(0, MAX_ROWS);
@@ -151,23 +280,23 @@
     );
   }
 
-  async function fetchNetwork() {
-    const r = await fetch(`${API}/api/network/processes`, { cache: "no-store" });
+  async function fetchRisks(epoch) {
+    const r = await fetch(`${API}/api/alerts/risks`, { cache: "no-store" });
     const j = await r.json();
+    if (epoch !== modeEpoch || mode !== "risks") return;
     const items = (j.items || []).slice(0, MAX_ROWS);
 
     renderLines(
-      items.map((p) => {
-        const c = p.connections || 0;
-        const cc = c >= 30 ? "critical" : c >= 15 ? "warn" : "info";
-        return `<div class="line ${cc}">[${p.pid ?? "N/A"}] ${p.name} | conn=${c} | ips=${p.unique_ips || 0}</div>`;
+      items.map((a) => {
+        return `<div class="line ${cls(a.severity)}">[${a.severity || "INFO"}] ${a.process || "N/A"} | conn=${a.connections || 0} | risk=${a.risk_count || 0} | ips=${a.risky_ips_count || 0} | ${a.top_reason || ""}</div>`;
       })
     );
   }
 
-  async function fetchLogs() {
+  async function fetchLogs(epoch) {
     const r = await fetch(`${API}/api/alerts/logs?limit=${MAX_ROWS}`, { cache: "no-store" });
     const j = await r.json();
+    if (epoch !== modeEpoch || mode !== "logs") return;
     const items = (j.items || []).sort((a, b) => (b.ts || 0) - (a.ts || 0));
 
     renderLines(
@@ -179,23 +308,42 @@
   }
 
   async function tick() {
+    if (tickInFlight) {
+      return;
+    }
+    tickInFlight = true;
+    const epoch = modeEpoch;
     document.getElementById("clock").textContent = new Date().toLocaleTimeString();
     try {
-      if (mode === "stats") return await fetchStats();
-      if (mode === "live") return await fetchLive();
-      if (mode === "check") return await fetchCheck();
-      if (mode === "network") return await fetchNetwork();
-      if (mode === "logs") return await fetchLogs();
+      if (mode === "stats") return await fetchStats(epoch);
+      if (mode === "live") return await fetchLive(epoch);
+      if (mode === "check") return await fetchCheck(epoch);
+      if (mode === "risks") return await fetchRisks(epoch);
+      if (mode === "logs") return await fetchLogs(epoch);
     } catch (e) {
-      document.getElementById("content").innerHTML = `<div class="line critical">HOST OFFLINE</div>`;
+      if (epoch === modeEpoch) {
+        document.getElementById("content").innerHTML = `<div class="line critical">HOST OFFLINE</div>`;
+      }
+    } finally {
+      tickInFlight = false;
     }
   }
 
   document.querySelectorAll(".mode-btn").forEach((btn) => {
-    btn.addEventListener("click", () => setMode(btn.dataset.mode));
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      setMode(btn.dataset.mode);
+    });
   });
 
-  setMode("stats");
+  window.addEventListener("hashchange", () => {
+    const hashMode = window.location.hash.replace("#", "").toLowerCase();
+    if (VALID_MODES.has(hashMode) && hashMode !== mode) {
+      setMode(hashMode, false);
+    }
+  });
+
+  setMode(resolveInitialMode(), false);
 </script>
 
 </body>
