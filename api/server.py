@@ -1,4 +1,4 @@
-﻿# api/server.py
+# api/server.py
 import json
 import os
 import time
@@ -31,8 +31,47 @@ def _json_response(handler: BaseHTTPRequestHandler, payload: dict, status: int =
 
 def _load_alert_log_items():
     items = []
+    candidate_paths = _get_alert_log_paths()
+
+    if not candidate_paths:
+        return []
+
+    for path in candidate_paths:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for ln in f:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    try:
+                        a = json.loads(ln)
+                    except json.JSONDecodeError:
+                        continue
+                    items.append(a)
+        except FileNotFoundError:
+            continue
+
+    items.sort(key=lambda x: x.get("ts", 0))  # old -> new
+    return items
+
+
+def _get_alert_log_paths():
+    candidate_paths = []
+
+    alert_dir = os.path.join("logs", "alerts")
+    if os.path.isdir(alert_dir):
+        for name in sorted(os.listdir(alert_dir)):
+            if not name.lower().endswith(".jsonl"):
+                continue
+            candidate_paths.append(os.path.join(alert_dir, name))
+
+    return candidate_paths
+
+
+def _read_alert_log_file(path: str):
+    items = []
     try:
-        with open("logs/alerts.jsonl", "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             for ln in f:
                 ln = ln.strip()
                 if not ln:
@@ -44,12 +83,44 @@ def _load_alert_log_items():
                 items.append(a)
     except FileNotFoundError:
         return []
-
-    items.sort(key=lambda x: x.get("ts", 0))  # old -> new
+    items.sort(key=lambda x: x.get("ts", 0))
     return items
 
 
-def _read_alert_logs(limit: int = 50, since_ts=None, offset: int = 0):
+def _build_alert_log_file_summary(filename: str, items):
+    severity_counts = {"INFO": 0, "WARN": 0, "CRITICAL": 0}
+    for item in items:
+        sev = str(item.get("severity", "INFO")).upper()
+        if sev in severity_counts:
+            severity_counts[sev] += 1
+
+    first_ts = items[0].get("ts") if items else None
+    last_ts = items[-1].get("ts") if items else None
+    label = filename
+    if filename.startswith("alerts_") and filename.endswith(".jsonl"):
+        label = filename[len("alerts_"):-len(".jsonl")]
+
+    return {
+        "filename": filename,
+        "label": label,
+        "count": len(items),
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+        "severity_counts": severity_counts,
+    }
+
+
+def _list_alert_log_files(limit: int = 90):
+    items = []
+    for path in _get_alert_log_paths():
+        filename = os.path.basename(path)
+        file_items = _read_alert_log_file(path)
+        items.append(_build_alert_log_file_summary(filename, file_items))
+    items.sort(key=lambda x: x.get("last_ts") or 0, reverse=True)
+    return items[:limit]
+
+
+def _read_alert_logs(limit: int = 50, since_ts=None, offset: int = 0, until_ts=None):
     items = _load_alert_log_items()
     if since_ts is not None:
         filtered = []
@@ -59,6 +130,15 @@ def _read_alert_logs(limit: int = 50, since_ts=None, offset: int = 0):
                 continue
             filtered.append(a)
         return filtered[:limit], len(filtered)
+
+    if until_ts is not None:
+        filtered = []
+        for a in items:
+            ts = a.get("ts")
+            if isinstance(ts, (int, float)) and ts > until_ts:
+                continue
+            filtered.append(a)
+        items = filtered
 
     total = len(items)
     if total == 0:
@@ -173,6 +253,28 @@ def make_api_handler(app=None):
                 items.sort(key=lambda x: x["connections"], reverse=True)
                 return _json_response(self, {"version": "1.0", "generated_at": time.time(), "items": items})
 
+            if req_path == "/api/processinfo":
+                query_value = query.get("pid", [None])[0]
+                if query_value in (None, ""):
+                    query_value = query.get("name", [""])[0]
+
+                if app is not None:
+                    detail = app.build_process_detail(query_value)
+                else:
+                    detail = None
+
+                if not detail:
+                    return _json_response(
+                        self,
+                        {"error": "process_not_found", "query": query_value},
+                        status=404,
+                    )
+
+                return _json_response(
+                    self,
+                    {"version": "1.0", "generated_at": time.time(), "detail": detail},
+                )
+
             if req_path == "/api/alerts/stats":
                 if app is not None:
                     stats = app.build_alerts_stats_summary()
@@ -208,6 +310,26 @@ def make_api_handler(app=None):
                 # Keep deterministic order for UI output
                 items.sort(key=lambda x: x.get("ts", 0), reverse=True)
                 return _json_response(self, {"version": "1.0", "generated_at": time.time(), "items": items})
+
+            if req_path == "/api/alerts/acknowledge-critical":
+                if app is None:
+                    return _json_response(
+                        self,
+                        {"error": "acknowledge_unavailable", "message": "Shared app state required."},
+                        status=503,
+                    )
+
+                acknowledged = app.acknowledge_critical_alerts()
+                stats = app.build_alerts_stats_summary()
+                return _json_response(
+                    self,
+                    {
+                        "version": "1.0",
+                        "generated_at": time.time(),
+                        "acknowledged": acknowledged,
+                        "stats": stats,
+                    },
+                )
 
             if req_path == "/api/snapshots/create":
                 if app is None:
@@ -274,6 +396,52 @@ def make_api_handler(app=None):
                     {"version": "1.0", "generated_at": time.time(), "snapshot": payload},
                 )
 
+            if req_path == "/api/logs/days":
+                limit = int(query.get("limit", ["90"])[0])
+                items = _list_alert_log_files(limit=limit)
+                return _json_response(
+                    self,
+                    {"version": "1.0", "generated_at": time.time(), "items": items},
+                )
+
+            if req_path == "/api/logs/day":
+                filename = query.get("file", [""])[0]
+                safe_name = os.path.basename(filename)
+                if not safe_name or safe_name != filename or not safe_name.lower().endswith(".jsonl"):
+                    return _json_response(
+                        self,
+                        {"error": "invalid_log_file", "path": filename},
+                        status=400,
+                    )
+
+                path = None
+                for candidate in _get_alert_log_paths():
+                    if os.path.basename(candidate) == safe_name:
+                        path = candidate
+                        break
+
+                if not path:
+                    return _json_response(
+                        self,
+                        {"error": "log_file_not_found", "path": safe_name},
+                        status=404,
+                    )
+
+                items = _read_alert_log_file(path)
+                summary = _build_alert_log_file_summary(safe_name, items)
+                return _json_response(
+                    self,
+                    {
+                        "version": "1.0",
+                        "generated_at": time.time(),
+                        "log": {
+                            "filename": safe_name,
+                            "summary": summary,
+                            "items": items,
+                        },
+                    },
+                )
+
             if req_path in ("/api/alerts/logs", "/api/alerts"):
                 limit = int(query.get("limit", ["50"])[0])
                 try:
@@ -282,7 +450,14 @@ def make_api_handler(app=None):
                     offset = 0
                 since_raw = query.get("since_ts", [None])[0]
                 since_ts = float(since_raw) if since_raw not in (None, "") else None
-                items, total = _read_alert_logs(limit=limit, since_ts=since_ts, offset=offset)
+                until_raw = query.get("until_ts", [None])[0]
+                until_ts = float(until_raw) if until_raw not in (None, "") else None
+                items, total = _read_alert_logs(
+                    limit=limit,
+                    since_ts=since_ts,
+                    offset=offset,
+                    until_ts=until_ts,
+                )
                 return _json_response(
                     self,
                     {

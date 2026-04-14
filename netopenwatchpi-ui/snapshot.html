@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>NetOpenWatchPi - Snapshot Analysis</title>
+  <title>NetOpenWatchPi - Analysis</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
@@ -15,14 +15,17 @@
     .shell{max-width:1480px;margin:0 auto;border:2px solid var(--line);padding:16px;position:relative}
     .shell::before{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.14) 3px)}
     .top{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);padding:8px 12px;color:var(--dim);font-size:34px}
+    .view-tabs{display:flex;gap:10px;margin-top:14px}
+    .view-tab{border:1px solid var(--line);padding:6px 14px;background:transparent;color:var(--dim);font:inherit;font-size:28px;cursor:pointer}
+    .view-tab.active{border-color:var(--text);color:var(--text)}
     .layout{margin-top:14px;display:grid;grid-template-columns:320px 1fr;gap:14px;min-height:78vh}
     .panel{border:1px solid var(--line);background:rgba(10,27,15,.96);padding:12px;min-height:0}
     .panel-title{font-size:30px;color:var(--dim);margin-bottom:10px}
     .list{display:flex;flex-direction:column;gap:8px;max-height:calc(78vh - 90px);overflow:auto;padding-right:4px}
-    .snapshot-item{border:1px solid var(--line);padding:8px 10px;background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}
-    .snapshot-item.active{border-color:var(--text);color:var(--text)}
-    .snapshot-item .main{font-size:28px}
-    .snapshot-item .meta{font-size:24px;color:var(--dim)}
+    .left-item{border:1px solid var(--line);padding:8px 10px;background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}
+    .left-item.active{border-color:var(--text);color:var(--text)}
+    .left-item .main{font-size:28px}
+    .left-item .meta{font-size:24px;color:var(--dim)}
     .filter{width:100%;border:1px solid var(--line);background:#08140b;color:var(--text);font:inherit;font-size:26px;padding:6px 8px;margin-bottom:10px}
     .content{display:grid;grid-template-rows:auto auto 1fr auto;gap:14px}
     .summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
@@ -34,11 +37,13 @@
     .section h3{margin:0 0 10px 0;font-size:28px;color:var(--dim);font-weight:normal}
     .row{font-size:24px;line-height:1.18;padding:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .warn{color:var(--warn)} .critical{color:var(--bad)} .info{color:var(--text)}
-    .proc-table{border:1px solid var(--line);padding:10px;background:#0a1b0f;min-height:260px}
+    .proc-table,.log-table{border:1px solid var(--line);padding:10px;background:#0a1b0f;min-height:260px}
     .proc-header,.proc-row{display:grid;grid-template-columns:260px 80px 90px 90px 1fr;gap:10px;align-items:center}
-    .proc-header{font-size:24px;color:var(--dim);padding-bottom:6px;border-bottom:1px solid rgba(86,179,95,.18)}
-    .proc-row{font-size:23px;padding:6px 0;border-bottom:1px solid rgba(86,179,95,.10)}
-    .proc-row.active{background:rgba(153,255,159,.08)}
+    .proc-header,.log-header{font-size:24px;color:var(--dim);padding-bottom:6px;border-bottom:1px solid rgba(86,179,95,.18)}
+    .proc-row{font-size:23px;padding:6px 0;border-bottom:1px solid rgba(86,179,95,.10);cursor:pointer}
+    .proc-row.active,.log-row.active{background:rgba(153,255,159,.08)}
+    .log-header,.log-row{display:grid;grid-template-columns:140px 100px 170px 220px 1fr;gap:10px;align-items:center}
+    .log-row{font-size:23px;padding:6px 0;border-bottom:1px solid rgba(86,179,95,.10);cursor:pointer}
     .muted{color:var(--dim)}
     .empty{font-size:28px;color:var(--dim)}
     .toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
@@ -47,30 +52,37 @@
     .detail-card{border:1px solid var(--line);padding:10px;background:#0a1b0f}
     .detail-card h3{margin:0 0 10px 0;font-size:28px;color:var(--dim);font-weight:normal}
     .subsection{margin:12px 0 6px 0;font-size:24px;color:var(--dim)}
+    .hidden{display:none}
     @media (max-width: 1100px){
       .layout{grid-template-columns:1fr}
       .summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
       .sections{grid-template-columns:1fr}
       .detail-grid{grid-template-columns:1fr}
       .proc-header,.proc-row{grid-template-columns:220px 70px 80px 80px 1fr}
+      .log-header,.log-row{grid-template-columns:110px 90px 150px 170px 1fr}
     }
   </style>
 </head>
 <body>
   <div class="shell">
     <div class="top">
-      <div id="title">SNAPSHOT ANALYSIS</div>
+      <div id="title">ANALYSIS</div>
       <div id="clock">--:--:--</div>
+    </div>
+
+    <div class="view-tabs">
+      <button type="button" class="view-tab active" data-view="snapshots">SNAPSHOTS</button>
+      <button type="button" class="view-tab" data-view="logs">LOGS</button>
     </div>
 
     <div class="layout">
       <div class="panel">
-        <div class="panel-title">SNAPSHOTS</div>
-        <input id="snapshotFilter" class="filter" type="text" placeholder="Filter by file or timestamp" />
-        <div id="snapshotList" class="list"></div>
+        <div id="leftTitle" class="panel-title">SNAPSHOTS</div>
+        <input id="leftFilter" class="filter" type="text" placeholder="Filter by file or timestamp" />
+        <div id="leftList" class="list"></div>
       </div>
 
-      <div class="content">
+      <div id="snapshotContent" class="content">
         <div id="summary" class="summary-grid"></div>
 
         <div class="sections">
@@ -110,18 +122,61 @@
           </div>
         </div>
       </div>
+
+      <div id="logsContent" class="content hidden">
+        <div id="logSummary" class="summary-grid"></div>
+
+        <div class="sections">
+          <div class="section">
+            <h3>Severity Summary</h3>
+            <div id="logSeverity"></div>
+          </div>
+          <div class="section">
+            <h3>Log Day Info</h3>
+            <div id="logMeta"></div>
+          </div>
+        </div>
+
+        <div class="log-table">
+          <div class="toolbar">
+            <div class="label">Entries</div>
+            <div id="logCount" class="label"></div>
+          </div>
+          <div class="log-header">
+            <div>Time</div>
+            <div>Severity</div>
+            <div>Type</div>
+            <div>Process</div>
+            <div>Reason</div>
+          </div>
+          <div id="logList"></div>
+        </div>
+
+        <div class="detail-card">
+          <h3 id="logDetailTitle">Log Entry Detail</h3>
+          <div id="logDetail"></div>
+        </div>
+      </div>
     </div>
   </div>
 
   <script>
     const API = "http://192.168.0.54:8765";
     const MAX_RISKS = 14;
+    let activeView = "snapshots";
     let allSnapshots = [];
     let currentSnapshot = null;
     let selectedProcessKey = "";
+    let allLogDays = [];
+    let currentLogDay = null;
+    let selectedLogKey = "";
 
-    function fileParam(){
-      return new URLSearchParams(window.location.search).get("file") || "";
+    function queryParams(){ return new URLSearchParams(window.location.search); }
+    function fileParam(){ return queryParams().get("file") || ""; }
+    function logParam(){ return queryParams().get("log") || ""; }
+    function viewParam(){
+      const v = (queryParams().get("view") || "").toLowerCase();
+      return v === "logs" ? "logs" : "snapshots";
     }
 
     function cls(sev){
@@ -135,10 +190,26 @@
       document.getElementById("clock").textContent = new Date().toLocaleTimeString();
     }
 
-    function setQueryFile(file){
+    function updateQuery(paramsMutator){
       const url = new URL(window.location.href);
-      url.searchParams.set("file", file);
+      paramsMutator(url.searchParams);
       window.history.replaceState({}, "", url.toString());
+    }
+
+    function setActiveView(next){
+      activeView = next === "logs" ? "logs" : "snapshots";
+      document.querySelectorAll(".view-tab").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.view === activeView);
+      });
+      document.getElementById("snapshotContent").classList.toggle("hidden", activeView !== "snapshots");
+      document.getElementById("logsContent").classList.toggle("hidden", activeView !== "logs");
+      document.getElementById("leftTitle").textContent = activeView === "logs" ? "LOG DAYS" : "SNAPSHOTS";
+      document.getElementById("leftFilter").placeholder = activeView === "logs"
+        ? "Filter by date or file"
+        : "Filter by file or timestamp";
+      updateQuery((params) => params.set("view", activeView));
+      renderLeftList();
+      renderRightPane();
     }
 
     async function fetchSnapshotList(){
@@ -151,34 +222,63 @@
       const r = await fetch(`${API}/api/snapshots/get?file=${encodeURIComponent(file)}`, { cache:"no-store" });
       const j = await r.json();
       currentSnapshot = j.snapshot || null;
-      if (currentSnapshot) {
-        document.getElementById("title").textContent = `SNAPSHOT ANALYSIS | ${file}`;
-      }
     }
 
-    function renderSnapshotList(){
-      const filter = (document.getElementById("snapshotFilter").value || "").toLowerCase();
+    async function fetchLogDays(){
+      const r = await fetch(`${API}/api/logs/days?limit=90`, { cache:"no-store" });
+      const j = await r.json();
+      allLogDays = j.items || [];
+    }
+
+    async function fetchLogDay(file){
+      const r = await fetch(`${API}/api/logs/day?file=${encodeURIComponent(file)}`, { cache:"no-store" });
+      const j = await r.json();
+      currentLogDay = j.log || null;
+    }
+
+    function renderLeftList(){
+      const filter = (document.getElementById("leftFilter").value || "").toLowerCase();
+      const root = document.getElementById("leftList");
+
+      if (activeView === "logs") {
+        const activeFile = logParam();
+        const items = allLogDays.filter((item) => {
+          const hay = `${item.filename || ""} ${item.label || ""}`.toLowerCase();
+          return !filter || hay.includes(filter);
+        });
+        if (!items.length) {
+          root.innerHTML = `<div class="empty">No log days found.</div>`;
+          return;
+        }
+        root.innerHTML = items.map((item) => `
+          <button type="button" class="left-item ${item.filename === activeFile ? "active" : ""}" data-log-file="${item.filename}">
+            <div class="main">${item.label || item.filename}</div>
+            <div class="meta">TOTAL ${item.count || 0} | C ${item.severity_counts?.CRITICAL || 0} | W ${item.severity_counts?.WARN || 0}</div>
+          </button>
+        `).join("");
+        return;
+      }
+
       const activeFile = fileParam();
       const items = allSnapshots.filter((item) => {
         const hay = `${item.filename || ""} ${item.label || ""}`.toLowerCase();
         return !filter || hay.includes(filter);
       });
 
-      const root = document.getElementById("snapshotList");
       if (!items.length) {
         root.innerHTML = `<div class="empty">No snapshots found.</div>`;
         return;
       }
 
       root.innerHTML = items.map((item) => `
-        <button type="button" class="snapshot-item ${item.filename === activeFile ? "active" : ""}" data-file="${item.filename}">
+        <button type="button" class="left-item ${item.filename === activeFile ? "active" : ""}" data-file="${item.filename}">
           <div class="main">${item.label || item.filename}</div>
           <div class="meta">PROC ${item.processes_with_network || 0} | CONN ${item.connections_total || 0} | RISK ${item.risk_total || 0}</div>
         </button>
       `).join("");
     }
 
-    function renderSummary(){
+    function renderSnapshotSummary(){
       const totals = currentSnapshot?.totals || {};
       document.getElementById("summary").innerHTML = [
         ["Processes", totals.processes_with_network || 0],
@@ -188,7 +288,7 @@
       ].map(([k,v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
     }
 
-    function renderMeta(){
+    function renderSnapshotMeta(){
       const s = currentSnapshot || {};
       const totals = s.totals || {};
       document.getElementById("metaList").innerHTML = [
@@ -209,7 +309,7 @@
       ].join("");
     }
 
-    function renderRisks(){
+    function renderSnapshotRisks(){
       const activeAlerts = (currentSnapshot?.active_alerts || []).slice(0, 8);
       const risks = (currentSnapshot?.risks || []).slice(0, MAX_RISKS);
       const root = document.getElementById("riskList");
@@ -217,7 +317,6 @@
         root.innerHTML = `<div class="empty">No risks in this snapshot.</div>`;
         return;
       }
-
       root.innerHTML = [
         `<div class="subsection">active_alerts</div>`,
         ...(activeAlerts.length
@@ -230,29 +329,21 @@
       ].join("");
     }
 
-    function renderProcesses(){
+    function renderSnapshotProcesses(){
       const filter = (document.getElementById("processFilter").value || "").toLowerCase();
       const processes = (currentSnapshot?.processes || []).filter((p) => {
-        const hay = [
-          p.name,
-          p.pid,
-          ...(p.unique_ips || []),
-          ...(p.remote_endpoints || []),
-        ].join(" ").toLowerCase();
+        const hay = [p.name, p.pid, ...(p.unique_ips || []), ...(p.remote_endpoints || [])].join(" ").toLowerCase();
         return !filter || hay.includes(filter);
       });
-
       const root = document.getElementById("processList");
       if (!processes.length){
         root.innerHTML = `<div class="empty" style="padding-top:12px">No matching processes.</div>`;
-        renderProcessDetail(null);
+        renderSnapshotProcessDetail(null);
         return;
       }
-
       if (!selectedProcessKey || !processes.some((p) => `${p.pid}|${p.name}` === selectedProcessKey)) {
         selectedProcessKey = `${processes[0].pid}|${processes[0].name}`;
       }
-
       root.innerHTML = processes.map((p) => {
         const key = `${p.pid}|${p.name}`;
         const endpoints = (p.remote_endpoints || []).slice(0, 3).join(", ") || "-";
@@ -266,31 +357,26 @@
           </div>
         `;
       }).join("");
-
       const active = processes.find((p) => `${p.pid}|${p.name}` === selectedProcessKey) || processes[0];
-      renderProcessDetail(active);
+      renderSnapshotProcessDetail(active);
     }
 
-    function renderProcessDetail(proc){
+    function renderSnapshotProcessDetail(proc){
       const metaRoot = document.getElementById("detailMeta");
       const endpointsRoot = document.getElementById("detailEndpoints");
       const title = document.getElementById("detailTitle");
-
       if (!proc){
         title.textContent = "Process Detail";
         metaRoot.innerHTML = `<div class="empty">No process selected.</div>`;
         endpointsRoot.innerHTML = "";
         return;
       }
-
       title.textContent = `${proc.name} [${proc.pid ?? "N/A"}]`;
-
       const states = Object.entries(proc.states || {}).map(([k, v]) => `${k}=${v}`).join(" | ") || "-";
       const protocols = Object.entries(proc.protocols || {}).map(([k, v]) => `${k}=${v}`).join(" | ") || "-";
       const uniqueIps = (proc.unique_ips || []).slice(0, 8);
       const remoteEndpoints = (proc.remote_endpoints || []).slice(0, 10);
       const localEndpoints = (proc.local_endpoints || []).slice(0, 6);
-
       metaRoot.innerHTML = [
         `<div class="row info">connections: ${proc.connections || 0}</div>`,
         `<div class="row info">unique_ips: ${proc.unique_ips_count || 0}</div>`,
@@ -300,7 +386,6 @@
         `<div class="subsection">unique_ips</div>`,
         ...(uniqueIps.length ? uniqueIps.map((ip) => `<div class="row info">${ip}</div>`) : [`<div class="row muted">-</div>`]),
       ].join("");
-
       endpointsRoot.innerHTML = [
         `<div class="subsection">remote_endpoints</div>`,
         ...(remoteEndpoints.length ? remoteEndpoints.map((ep) => `<div class="row info">${ep}</div>`) : [`<div class="row muted">-</div>`]),
@@ -309,60 +394,211 @@
       ].join("");
     }
 
-    function renderAll(){
+    function renderLogsSummary(){
+      const summary = currentLogDay?.summary || {};
+      document.getElementById("logSummary").innerHTML = [
+        ["Entries", summary.count || 0],
+        ["Critical", summary.severity_counts?.CRITICAL || 0],
+        ["Warn", summary.severity_counts?.WARN || 0],
+        ["Info", summary.severity_counts?.INFO || 0],
+      ].map(([k,v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+    }
+
+    function renderLogsMeta(){
+      const summary = currentLogDay?.summary || {};
+      const fmt = (ts) => ts ? new Date(ts * 1000).toLocaleString() : "--";
+      document.getElementById("logMeta").innerHTML = [
+        `<div class="subsection">file</div>`,
+        `<div class="row info">day ${summary.label || "--"}</div>`,
+        `<div class="row info">filename ${summary.filename || "--"}</div>`,
+        `<div class="subsection">window</div>`,
+        `<div class="row info">first ${fmt(summary.first_ts)}</div>`,
+        `<div class="row info">last ${fmt(summary.last_ts)}</div>`,
+        `<div class="subsection">totals</div>`,
+        `<div class="row critical">critical ${summary.severity_counts?.CRITICAL || 0}</div>`,
+        `<div class="row warn">warn ${summary.severity_counts?.WARN || 0}</div>`,
+        `<div class="row info">info ${summary.severity_counts?.INFO || 0}</div>`,
+      ].join("");
+    }
+
+    function renderLogsSeverity(){
+      const summary = currentLogDay?.summary || {};
+      document.getElementById("logSeverity").innerHTML = [
+        `<div class="row critical">CRITICAL ${summary.severity_counts?.CRITICAL || 0}</div>`,
+        `<div class="row warn">WARN ${summary.severity_counts?.WARN || 0}</div>`,
+        `<div class="row info">INFO ${summary.severity_counts?.INFO || 0}</div>`,
+      ].join("");
+    }
+
+    function renderLogEntries(){
+      const listRoot = document.getElementById("logList");
+      const detailRoot = document.getElementById("logDetail");
+      const detailTitle = document.getElementById("logDetailTitle");
+      const countLabel = document.getElementById("logCount");
+      const items = [...(currentLogDay?.items || [])].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+      countLabel.textContent = `${items.length} entries`;
+      if (!items.length) {
+        listRoot.innerHTML = `<div class="empty" style="padding-top:12px">No log entries.</div>`;
+        detailTitle.textContent = "Log Entry Detail";
+        detailRoot.innerHTML = `<div class="empty">No log selected.</div>`;
+        return;
+      }
+      if (!selectedLogKey || !items.some((item) => (item.event_key || `${item.ts}|${item.type}|${item.process}`) === selectedLogKey)) {
+        selectedLogKey = items[0].event_key || `${items[0].ts}|${items[0].type}|${items[0].process}`;
+      }
+      listRoot.innerHTML = items.map((item) => {
+        const key = item.event_key || `${item.ts}|${item.type}|${item.process}`;
+        const timeText = item.ts ? new Date(item.ts * 1000).toLocaleTimeString() : "--:--:--";
+        return `
+          <div class="log-row ${key === selectedLogKey ? "active" : ""}" data-log-key="${key}">
+            <div>${timeText}</div>
+            <div class="${cls(item.severity)}">${item.severity || "INFO"}</div>
+            <div>${item.type || "event"}</div>
+            <div>${item.process || "-"}</div>
+            <div class="muted">${item.reason || "-"}</div>
+          </div>
+        `;
+      }).join("");
+      const active = items.find((item) => (item.event_key || `${item.ts}|${item.type}|${item.process}`) === selectedLogKey) || items[0];
+      detailTitle.textContent = `${active.type || "event"} | ${active.process || "-"}`;
+      detailRoot.innerHTML = [
+        `<div class="row ${cls(active.severity)}">severity ${active.severity || "INFO"}</div>`,
+        `<div class="row info">time ${active.ts ? new Date(active.ts * 1000).toLocaleString() : "--"}</div>`,
+        `<div class="row info">process ${active.process || "-"}</div>`,
+        `<div class="row info">pid ${active.pid ?? "-"}</div>`,
+        `<div class="row info">ip ${active.remote_ip || "-"}</div>`,
+        `<div class="row info">port ${active.remote_port ?? "-"}</div>`,
+        `<div class="row info">reason ${active.reason || "-"}</div>`,
+        `<div class="row info">event_key ${active.event_key || "-"}</div>`,
+      ].join("");
+    }
+
+    function renderSnapshotsView(){
       if (!currentSnapshot){
         document.getElementById("summary").innerHTML = `<div class="empty">Snapshot not loaded.</div>`;
         document.getElementById("riskList").innerHTML = "";
         document.getElementById("metaList").innerHTML = "";
         document.getElementById("processList").innerHTML = "";
-        renderProcessDetail(null);
+        renderSnapshotProcessDetail(null);
         return;
       }
-      renderSummary();
-      renderMeta();
-      renderRisks();
-      renderProcesses();
+      renderSnapshotSummary();
+      renderSnapshotMeta();
+      renderSnapshotRisks();
+      renderSnapshotProcesses();
+    }
+
+    function renderLogsView(){
+      if (!currentLogDay) {
+        document.getElementById("logSummary").innerHTML = `<div class="empty">Log day not loaded.</div>`;
+        document.getElementById("logSeverity").innerHTML = "";
+        document.getElementById("logMeta").innerHTML = "";
+        document.getElementById("logList").innerHTML = "";
+        document.getElementById("logDetail").innerHTML = `<div class="empty">No log selected.</div>`;
+        document.getElementById("logCount").textContent = "";
+        return;
+      }
+      renderLogsSummary();
+      renderLogsSeverity();
+      renderLogsMeta();
+      renderLogEntries();
+    }
+
+    function renderRightPane(){
+      if (activeView === "logs") {
+        document.getElementById("title").textContent = currentLogDay?.summary?.label
+          ? `LOG ANALYSIS | ${currentLogDay.summary.label}`
+          : "LOG ANALYSIS";
+        renderLogsView();
+      } else {
+        const file = fileParam();
+        document.getElementById("title").textContent = file ? `SNAPSHOT ANALYSIS | ${file}` : "SNAPSHOT ANALYSIS";
+        renderSnapshotsView();
+      }
     }
 
     async function selectSnapshot(file){
       if (!file) return;
-      setQueryFile(file);
+      updateQuery((params) => {
+        params.set("file", file);
+        params.delete("log");
+        params.set("view", "snapshots");
+      });
       await fetchSnapshot(file);
-      renderSnapshotList();
-      renderAll();
+      renderLeftList();
+      renderRightPane();
+    }
+
+    async function selectLogDay(file){
+      if (!file) return;
+      updateQuery((params) => {
+        params.set("log", file);
+        params.delete("file");
+        params.set("view", "logs");
+      });
+      await fetchLogDay(file);
+      renderLeftList();
+      renderRightPane();
     }
 
     async function bootstrap(){
       setClock();
       await fetchSnapshotList();
-      renderSnapshotList();
+      await fetchLogDays();
+      activeView = viewParam();
 
-      let file = fileParam();
-      if (!file && allSnapshots.length) {
-        file = allSnapshots[0].filename;
+      let snapFile = fileParam();
+      if (!snapFile && allSnapshots.length) {
+        snapFile = allSnapshots[0].filename;
+      }
+      if (snapFile) {
+        await fetchSnapshot(snapFile);
       }
 
-      if (file) {
-        await selectSnapshot(file);
-      } else {
-        renderAll();
+      let logFile = logParam();
+      if (!logFile && allLogDays.length) {
+        logFile = allLogDays[0].filename;
       }
+      if (logFile) {
+        await fetchLogDay(logFile);
+      }
+
+      setActiveView(activeView);
     }
 
-    document.getElementById("snapshotList").addEventListener("click", async (e) => {
-      const el = e.target.closest("[data-file]");
-      if (!el) return;
-      selectedProcessKey = "";
-      await selectSnapshot(el.dataset.file);
+    document.getElementById("leftList").addEventListener("click", async (e) => {
+      const logEl = e.target.closest("[data-log-file]");
+      if (logEl) {
+        selectedLogKey = "";
+        await selectLogDay(logEl.dataset.logFile);
+        return;
+      }
+      const snapEl = e.target.closest("[data-file]");
+      if (snapEl) {
+        selectedProcessKey = "";
+        await selectSnapshot(snapEl.dataset.file);
+      }
     });
 
-    document.getElementById("snapshotFilter").addEventListener("input", renderSnapshotList);
-    document.getElementById("processFilter").addEventListener("input", renderProcesses);
+    document.querySelectorAll(".view-tab").forEach((btn) => {
+      btn.addEventListener("click", () => setActiveView(btn.dataset.view));
+    });
+
+    document.getElementById("leftFilter").addEventListener("input", renderLeftList);
+    document.getElementById("processFilter").addEventListener("input", renderSnapshotsView);
+
     document.getElementById("processList").addEventListener("click", (e) => {
       const el = e.target.closest("[data-proc-key]");
       if (!el) return;
       selectedProcessKey = el.dataset.procKey;
-      renderProcesses();
+      renderSnapshotProcesses();
+    });
+
+    document.getElementById("logList").addEventListener("click", (e) => {
+      const el = e.target.closest("[data-log-key]");
+      if (!el) return;
+      selectedLogKey = el.dataset.logKey;
+      renderLogEntries();
     });
 
     bootstrap();

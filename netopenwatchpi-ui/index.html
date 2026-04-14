@@ -23,6 +23,7 @@
     .date{margin-top:10px;font-size:34px;color:var(--dim)}
     .status{margin-top:16px;font-size:28px;color:var(--dim)}
     .status.bad{color:var(--bad)}
+    .status.critical-box{border:1px solid var(--warn);padding:4px 10px;color:var(--bad)}
     .footer{margin-top:8px;height:42px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-around;color:var(--dim);font-size:24px}
     .tab{border:1px solid var(--line);padding:1px 8px}
     .active{color:var(--text);border-color:var(--text)}
@@ -59,11 +60,18 @@
   <script>
     const API = "http://192.168.0.54:8765";
     let indicatorInFlight = false;
+    let ackInFlight = false;
+    let unacknowledgedCriticals = 0;
     window.deviceNav = {
       onBack() { return true; },
       onUp() { return true; },
       onDown() { return true; },
-      onSelect() { return true; },
+      async onSelect() {
+        if (unacknowledgedCriticals > 0) {
+          await acknowledgeCriticals();
+        }
+        return true;
+      },
     };
 
     function updateTime(){
@@ -73,28 +81,59 @@
       document.getElementById("mainDate").textContent = now.toLocaleDateString();
     }
 
+    function applyCriticalStats(stats){
+      const mail = document.getElementById("mail");
+      const info = document.getElementById("criticalInfo");
+      const unack = Number(stats?.unacknowledged_critical_total || 0);
+      const activeCritical = Number(stats?.active_critical_total || 0);
+      const acked = Number(stats?.acknowledged_critical_total || 0);
+      unacknowledgedCriticals = unack;
+
+      if(unack > 0){
+        mail.classList.add("on");
+        info.classList.add("bad", "critical-box");
+        info.textContent = `UNACK CRITICAL ${unack} | SELECT ACK`;
+      }else if(activeCritical > 0){
+        mail.classList.remove("on");
+        info.classList.remove("critical-box");
+        info.classList.add("bad");
+        info.textContent = `Critical active: ${activeCritical} | Acked: ${acked}`;
+      }else{
+        mail.classList.remove("on");
+        info.classList.remove("bad", "critical-box");
+        info.textContent = "No critical alerts";
+      }
+    }
+
+    async function acknowledgeCriticals(){
+      if (ackInFlight || unacknowledgedCriticals <= 0) return;
+      ackInFlight = true;
+      try{
+        const r = await fetch(`${API}/api/alerts/acknowledge-critical`, { cache:"no-store" });
+        const j = await r.json();
+        applyCriticalStats(j.stats || {});
+      }catch(e){
+        const info = document.getElementById("criticalInfo");
+        info.classList.add("bad");
+        info.textContent = "ACK FAILED";
+      }finally{
+        ackInFlight = false;
+      }
+    }
+
     async function updateCriticalIndicator(){
       if (indicatorInFlight) return;
       indicatorInFlight = true;
-      const mail = document.getElementById("mail");
-      const info = document.getElementById("criticalInfo");
       try{
         const r = await fetch(`${API}/api/alerts/stats`, {cache:"no-store"});
         const j = await r.json();
-        const critical = j.stats?.last_hour?.CRITICAL || 0;
-
-        if(critical > 0){
-          mail.classList.add("on");
-          info.classList.add("bad");
-          info.textContent = `Critical alerts (last hour): ${critical}`;
-        }else{
-          mail.classList.remove("on");
-          info.classList.remove("bad");
-          info.textContent = "No critical alerts";
-        }
+        applyCriticalStats(j.stats || {});
       }catch(e){
+        const mail = document.getElementById("mail");
+        const info = document.getElementById("criticalInfo");
         mail.classList.remove("on");
         info.classList.add("bad");
+        info.classList.remove("critical-box");
         info.textContent = "API OFFLINE";
       }finally{
         indicatorInFlight = false;

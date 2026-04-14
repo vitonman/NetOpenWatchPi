@@ -3,13 +3,14 @@
 import json
 import os
 from typing import Set, List
+from core.user_settings import load_settings, save_settings
 
 class IgnoreList:
     """Manages the list of processes to ignore.
     By default almost nothing is ignored - user has full control."""
 
     def __init__(self):
-        self.config_path = "config/config.json"
+        self.config_path = "config/settings.json"
         self.ignored_processes: Set[str] = set()
 
         # Minimal default - only critical noise that almost never should be monitored
@@ -25,22 +26,18 @@ class IgnoreList:
         """Load ignore list from config file"""
         os.makedirs("config", exist_ok=True)
 
-        if os.path.exists(self.config_path):
-            try:
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.ignored_processes = set(data.get("ignored_processes", []))
-            except Exception:
-                self.ignored_processes = set(self.default_ignored)
-        else:
+        try:
+            data = load_settings()
+            self.ignored_processes = set(data.get("ignored_processes", []))
+        except Exception:
             self.ignored_processes = set(self.default_ignored)
-            self.save()
 
     def save(self):
         """Save current ignore list"""
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                json.dump({"ignored_processes": sorted(list(self.ignored_processes))}, f, indent=4)
+            data = load_settings()
+            data["ignored_processes"] = sorted(list(self.ignored_processes))
+            save_settings(data)
         except Exception as e:
             print(f"Error saving ignore list: {e}")
 

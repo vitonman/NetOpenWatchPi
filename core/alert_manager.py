@@ -7,27 +7,25 @@ from collections import defaultdict
 from typing import Dict, List, Optional
 
 from core.threat_engine import threat_engine
+from core.user_settings import load_settings
 
 
 class AlertManager:
     """Detects suspicious network activity and generates structured alert events."""
 
     def __init__(self, ignore_list):
+        settings = load_settings()
+        alert_settings = settings.get("alerts", {})
+        thresholds = alert_settings.get("thresholds", {})
         self.last_alert_time = {}
-        self.alert_cooldown = 15
+        self.alert_cooldown = alert_settings.get("default_cooldown_sec", 15)
         self.ignore_list = ignore_list
 
         # Per-alert-type cooldown policy
-        self.alert_cooldown_by_type = {
-            "high_connections": 15,
-            "many_unique_ips": 15,
-            "heavy_traffic": 15,
-            "new_process_on_network": 120,
-            "new_remote_ip_for_process": 120,
-            "watchlist_ip_match": 30,
-            "suspicious_port": 30,
-            "known_malware_process": 10,
-        }
+        self.alert_cooldown_by_type = alert_settings.get("cooldowns_by_type", {})
+        self.threshold_high_connections = thresholds.get("high_connections_warn", 20)
+        self.threshold_many_unique_ips = thresholds.get("many_unique_ips_warn", 8)
+        self.threshold_heavy_traffic_established = thresholds.get("heavy_traffic_established_warn", 12)
 
         # Session memory
         self.seen_processes = set()
@@ -41,9 +39,23 @@ class AlertManager:
         self.stats_day = defaultdict(int)
         self.last_hour_reset = time.time()
         self.last_day_reset = time.time()
-        self.alert_log_path = "logs/alerts.jsonl"
+        self.alert_log_dir = os.path.join("logs", "alerts")
+        self.legacy_alert_log_path = os.path.join("logs", "alerts.jsonl")
         self.state_path = "logs/alert_state.json"
         self.active_alert_keys = set()
+        self.acknowledged_alert_keys = set()
+        self.severity_by_type = {
+            "high_connections": "WARN",
+            "many_unique_ips": "WARN",
+            "heavy_traffic": "WARN",
+            "new_process_on_network": "INFO",
+            "new_remote_ip_for_process": "INFO",
+            "watchlist_ip_match": "CRITICAL",
+            "suspicious_port": "WARN",
+            "known_malware_process": "CRITICAL",
+            "alert_resolved": "INFO",
+        }
+        self._migrate_legacy_alert_log()
         self._load_state()
 
     def _rotate_stats_windows(self, now: float) -> None:
@@ -82,6 +94,7 @@ class AlertManager:
                 self.seen_remote_ip_by_process[proc] = set(ips or [])
 
             self.active_alert_keys = set(data.get("active_alert_keys", []))
+            self.acknowledged_alert_keys = set(data.get("acknowledged_alert_keys", []))
         except Exception:
             # State load issues should not break monitoring
             pass
@@ -97,6 +110,7 @@ class AlertManager:
                     for proc, ips in self.seen_remote_ip_by_process.items()
                 },
                 "active_alert_keys": sorted(self.active_alert_keys),
+                "acknowledged_alert_keys": sorted(self.acknowledged_alert_keys),
             }
             with open(self.state_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -156,11 +170,126 @@ class AlertManager:
     def _append_alert_log(self, event: Dict) -> None:
         """Append one alert event as JSONL row."""
         try:
-            os.makedirs(os.path.dirname(self.alert_log_path), exist_ok=True)
-            with open(self.alert_log_path, "a", encoding="utf-8") as f:
+            ts = event.get("ts")
+            if not isinstance(ts, (int, float)):
+                ts = time.time()
+            day_label = time.strftime("%Y-%m-%d", time.localtime(ts))
+            log_path = os.path.join(self.alert_log_dir, f"alerts_{day_label}.jsonl")
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
         except Exception:
             # Logging must never break monitoring runtime
+            pass
+
+    def _event_signature(self, event: Dict):
+        return (
+            event.get("event_key"),
+            event.get("ts"),
+            event.get("type"),
+            event.get("process"),
+        )
+
+    def _parse_event_key(self, event_key: str):
+        parts = event_key.split("|", 4)
+        if len(parts) != 5:
+            return None
+        etype, proc, pid_raw, ip_raw, port_raw = parts
+        try:
+            pid_val = None if pid_raw in ("None", "", "null") else int(pid_raw)
+        except ValueError:
+            pid_val = None
+        ip_val = None if ip_raw in ("None", "", "null") else ip_raw
+        try:
+            port_val = None if port_raw in ("None", "", "null") else int(port_raw)
+        except ValueError:
+            port_val = None
+        return etype, proc, pid_val, ip_val, port_val
+
+    def _is_critical_event_key(self, event_key: str) -> bool:
+        parsed = self._parse_event_key(event_key)
+        if not parsed:
+            return False
+        event_type = parsed[0]
+        return self.severity_by_type.get(event_type, "INFO") == "CRITICAL"
+
+    def get_active_critical_keys(self) -> List[str]:
+        return sorted(key for key in self.active_alert_keys if self._is_critical_event_key(key))
+
+    def get_unacknowledged_critical_keys(self) -> List[str]:
+        return sorted(key for key in self.get_active_critical_keys() if key not in self.acknowledged_alert_keys)
+
+    def acknowledge_critical_alerts(self) -> int:
+        keys = self.get_unacknowledged_critical_keys()
+        if not keys:
+            return 0
+        self.acknowledged_alert_keys.update(keys)
+        self._save_state()
+        return len(keys)
+
+    def _migrate_legacy_alert_log(self) -> None:
+        """Migrate old flat alert log into daily files if it still exists."""
+        try:
+            if not os.path.isfile(self.legacy_alert_log_path):
+                return
+
+            os.makedirs(self.alert_log_dir, exist_ok=True)
+            existing = {}
+            for name in os.listdir(self.alert_log_dir):
+                if not name.lower().endswith(".jsonl"):
+                    continue
+                path = os.path.join(self.alert_log_dir, name)
+                sigs = set()
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        for ln in f:
+                            ln = ln.strip()
+                            if not ln:
+                                continue
+                            try:
+                                row = json.loads(ln)
+                            except json.JSONDecodeError:
+                                continue
+                            sigs.add(self._event_signature(row))
+                except OSError:
+                    continue
+                existing[name] = sigs
+
+            writers = {}
+            try:
+                with open(self.legacy_alert_log_path, "r", encoding="utf-8") as f:
+                    for ln in f:
+                        ln = ln.strip()
+                        if not ln:
+                            continue
+                        try:
+                            event = json.loads(ln)
+                        except json.JSONDecodeError:
+                            continue
+                        ts = event.get("ts")
+                        if not isinstance(ts, (int, float)):
+                            continue
+                        day_label = time.strftime("%Y-%m-%d", time.localtime(ts))
+                        filename = f"alerts_{day_label}.jsonl"
+                        sig = self._event_signature(event)
+                        bucket = existing.setdefault(filename, set())
+                        if sig in bucket:
+                            continue
+                        bucket.add(sig)
+                        path = os.path.join(self.alert_log_dir, filename)
+                        if filename not in writers:
+                            writers[filename] = open(path, "a", encoding="utf-8")
+                        writers[filename].write(json.dumps(event, ensure_ascii=False) + "\n")
+            finally:
+                for fh in writers.values():
+                    fh.close()
+
+            try:
+                os.remove(self.legacy_alert_log_path)
+            except OSError:
+                pass
+        except Exception:
+            # Migration issues should never break monitoring runtime
             pass
 
     def check_anomalies(self, processes: Dict) -> List[Dict]:
@@ -199,22 +328,6 @@ class AlertManager:
             if event:
                 alerts.append(event)
                 state_changed = True
-
-        def parse_event_key(event_key: str):
-            parts = event_key.split("|", 4)
-            if len(parts) != 5:
-                return None
-            etype, proc, pid_raw, ip_raw, port_raw = parts
-            try:
-                pid_val = None if pid_raw in ("None", "", "null") else int(pid_raw)
-            except ValueError:
-                pid_val = None
-            ip_val = None if ip_raw in ("None", "", "null") else ip_raw
-            try:
-                port_val = None if port_raw in ("None", "", "null") else int(port_raw)
-            except ValueError:
-                port_val = None
-            return etype, proc, pid_val, ip_val, port_val
 
         for name, data in processes.items():
             if self.ignore_list.contains(name):
@@ -259,31 +372,31 @@ class AlertManager:
                         state_changed = True
 
             # Threshold rules
-            if conn_count > 20:
+            if conn_count > self.threshold_high_connections:
                 raise_stateful_alert(
                     event_type="high_connections",
                     severity="WARN",
                     process=name,
                     pid=pid,
-                    reason=f"Connections={conn_count} > threshold=20",
+                    reason=f"Connections={conn_count} > threshold={self.threshold_high_connections}",
                 )
 
-            if unique_ips_count > 8:
+            if unique_ips_count > self.threshold_many_unique_ips:
                 raise_stateful_alert(
                     event_type="many_unique_ips",
                     severity="WARN",
                     process=name,
                     pid=pid,
-                    reason=f"Unique IPs={unique_ips_count} > threshold=8",
+                    reason=f"Unique IPs={unique_ips_count} > threshold={self.threshold_many_unique_ips}",
                 )
 
-            if established > 12:
+            if established > self.threshold_heavy_traffic_established:
                 raise_stateful_alert(
                     event_type="heavy_traffic",
                     severity="WARN",
                     process=name,
                     pid=pid,
-                    reason=f"ESTABLISHED={established} > threshold=12",
+                    reason=f"ESTABLISHED={established} > threshold={self.threshold_heavy_traffic_established}",
                 )
 
             # Threat list rules
@@ -344,7 +457,7 @@ class AlertManager:
 
         resolved_keys = self.active_alert_keys - current_active_keys
         for key in resolved_keys:
-            parsed = parse_event_key(key)
+            parsed = self._parse_event_key(key)
             if not parsed:
                 continue
             prev_type, proc, pid_val, ip_val, port_val = parsed
@@ -359,6 +472,11 @@ class AlertManager:
             )
             if resolved_event:
                 alerts.append(resolved_event)
+
+        resolved_ack_keys = self.acknowledged_alert_keys - current_active_keys
+        if resolved_ack_keys:
+            self.acknowledged_alert_keys -= resolved_ack_keys
+            state_changed = True
 
         if current_active_keys != self.active_alert_keys:
             self.active_alert_keys = current_active_keys

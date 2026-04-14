@@ -5,6 +5,7 @@ import time
 import threading
 import sys
 import json
+import webbrowser
 import psutil
 import socket
 from collections import defaultdict
@@ -13,20 +14,25 @@ from core.network_collector import NetworkCollector
 from core.alert_manager import AlertManager
 from core.ignore_list import IgnoreList
 from core.display import print_startup_info
+from core.user_settings import load_settings
 from tray.tray_manager import TrayManager
 from api.server import run_api_server
 
 
 class MonitorApp:
     def __init__(self):
+        settings = load_settings()
+        app_settings = settings.get("app", {})
+        risk_settings = settings.get("risk", {})
         self.ignore_list = IgnoreList()
         self.collector = NetworkCollector()
         self.alert_manager = AlertManager(self.ignore_list)
         self.running = True
         self.last_top_processes = []
-        self.api_host = "0.0.0.0"
-        self.api_port = 8765
-        self.monitor_interval_sec = 2
+        self.api_host = app_settings.get("api_host", "0.0.0.0")
+        self.api_port = app_settings.get("api_port", 8765)
+        self.monitor_interval_sec = app_settings.get("monitor_interval_sec", 2)
+        self.analysis_page_url = app_settings.get("analysis_page_url", "http://localhost:8080/snapshot.html")
         self.current_processes = {}
         self.live_feed = []
         self.live_feed_seen = set()
@@ -34,7 +40,8 @@ class MonitorApp:
         self.live_feed_ttl_sec = 300
         self.live_feed_revision = 0
         self.risk_memory = {}
-        self.risk_ttl_sec = 90
+        self.risk_ttl_sec = risk_settings.get("memory_ttl_sec", 90)
+        self.noisy_risk_processes = set(risk_settings.get("noisy_processes", ["System Idle Process", "System"]))
         self.snapshot_dir = os.path.join("logs", "snapshots")
      
 
@@ -122,7 +129,6 @@ class MonitorApp:
         processes = processes if isinstance(processes, dict) else self.current_processes or self.collector.collect_network_data()
         current_risks = {}
         severity_rank = {"INFO": 1, "WARN": 2, "CRITICAL": 3}
-        noisy_processes = {"System Idle Process", "System"}
 
         for conn in psutil.net_connections(kind="inet4"):
             if conn.pid is None:
@@ -133,7 +139,7 @@ class MonitorApp:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
 
-            if name in noisy_processes:
+            if name in self.noisy_risk_processes:
                 continue
 
             remote_ip = getattr(conn.raddr, "ip", None) if conn.raddr else None
@@ -238,11 +244,17 @@ class MonitorApp:
 
         recent_live = self.live_feed[0] if self.live_feed else None
         recent_critical = next((item for item in self.live_feed if item.get("severity") == "CRITICAL"), None)
+        active_critical_keys = self.alert_manager.get_active_critical_keys()
+        unack_critical_keys = self.alert_manager.get_unacknowledged_critical_keys()
 
         return {
             "last_hour": stats.get("last_hour", {}),
             "last_day": stats.get("last_day", {}),
             "active_total": len(self.alert_manager.active_alert_keys),
+            "active_critical_total": len(active_critical_keys),
+            "acknowledged_critical_total": len(active_critical_keys) - len(unack_critical_keys),
+            "unacknowledged_critical_total": len(unack_critical_keys),
+            "has_unacknowledged_critical": bool(unack_critical_keys),
             "live_feed_total": len(self.live_feed),
             "live_revision": self.live_feed_revision,
             "processes_with_network": len(self.current_processes),
@@ -265,16 +277,7 @@ class MonitorApp:
 
     def build_active_alerts_snapshot(self):
         """Return currently active alerts with best-effort event details."""
-        severity_by_type = {
-            "high_connections": "WARN",
-            "many_unique_ips": "WARN",
-            "heavy_traffic": "WARN",
-            "new_process_on_network": "INFO",
-            "new_remote_ip_for_process": "INFO",
-            "watchlist_ip_match": "CRITICAL",
-            "suspicious_port": "WARN",
-            "known_malware_process": "CRITICAL",
-        }
+        severity_by_type = self.alert_manager.severity_by_type
 
         def parse_event_key(event_key):
             parts = event_key.split("|", 4)
@@ -322,6 +325,7 @@ class MonitorApp:
                     "remote_port": live_item.get("remote_port", port_val),
                     "reason": live_item.get("reason", ""),
                     "ts": live_item.get("ts"),
+                    "acknowledged": event_key in self.alert_manager.acknowledged_alert_keys,
                 }
             )
 
@@ -334,6 +338,124 @@ class MonitorApp:
             reverse=True,
         )
         return items
+
+    def acknowledge_critical_alerts(self):
+        """Acknowledge currently active critical alerts."""
+        return self.alert_manager.acknowledge_critical_alerts()
+
+    def build_process_detail(self, name_or_pid):
+        """Return structured live detail for a process by name or PID."""
+        query = str(name_or_pid).strip()
+        if not query:
+            return None
+
+        is_pid_query = query.isdigit()
+        target_pid = int(query) if is_pid_query else None
+        target_name = query.lower()
+
+        matched_rows = []
+        matched_pids = set()
+        matched_names = set()
+        protocols = {"TCP": 0, "UDP": 0}
+        states = {}
+        unique_ips = set()
+        remote_endpoints = set()
+        local_endpoints = set()
+        remote_ports = set()
+        risk_summary = defaultdict(list)
+
+        from core.threat_engine import threat_engine
+
+        for c in psutil.net_connections(kind="inet4"):
+            if c.pid is None:
+                continue
+
+            try:
+                pname = psutil.Process(c.pid).name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+            if is_pid_query:
+                if c.pid != target_pid:
+                    continue
+            else:
+                if pname.lower() != target_name:
+                    continue
+
+            remote_ip = getattr(c.raddr, "ip", None) if c.raddr else None
+            remote_port = getattr(c.raddr, "port", None) if c.raddr else None
+            local_ip = getattr(c.laddr, "ip", None) if c.laddr else None
+            local_port = getattr(c.laddr, "port", None) if c.laddr else None
+
+            flags = threat_engine.analyze_connection(pname, remote_ip, remote_port)
+
+            proto = "TCP" if c.type == socket.SOCK_STREAM else "UDP"
+            state = c.status or "-"
+            local = f"{local_ip}:{local_port}" if local_ip is not None and local_port is not None else "-"
+            remote = f"{remote_ip}:{remote_port}" if remote_ip is not None and remote_port is not None else "-"
+
+            matched_rows.append(
+                {
+                    "pid": c.pid,
+                    "name": pname,
+                    "protocol": proto,
+                    "state": state,
+                    "local": local,
+                    "remote": remote,
+                    "flags": [f["reason"] for f in flags],
+                }
+            )
+
+            matched_pids.add(c.pid)
+            matched_names.add(pname)
+            protocols[proto] += 1
+            states[state] = states.get(state, 0) + 1
+
+            if remote_ip:
+                unique_ips.add(remote_ip)
+            if remote_port is not None:
+                remote_ports.add(remote_port)
+            if remote != "-":
+                remote_endpoints.add(remote)
+            if local != "-":
+                local_endpoints.add(local)
+
+            for f in flags:
+                risk_summary[f["severity"]].append(f["reason"])
+
+        if not matched_rows:
+            return None
+
+        severity_order = ["CRITICAL", "WARN", "INFO"]
+        risk_items = []
+        for severity in severity_order:
+            if severity not in risk_summary:
+                continue
+            risk_items.append(
+                {
+                    "severity": severity,
+                    "reasons": sorted(set(risk_summary[severity])),
+                }
+            )
+
+        matched_rows.sort(key=lambda row: (row["pid"], row["protocol"], row["state"], row["local"], row["remote"]))
+
+        return {
+            "query": query,
+            "display_name": ", ".join(sorted(matched_names)),
+            "pids": sorted(matched_pids),
+            "connections": len(matched_rows),
+            "unique_ips_count": len(unique_ips),
+            "unique_ips": sorted(unique_ips),
+            "established": states.get("ESTABLISHED", 0),
+            "protocols": protocols,
+            "states": dict(sorted(states.items())),
+            "remote_ports": sorted(remote_ports),
+            "remote_endpoints": sorted(remote_endpoints),
+            "local_endpoints": sorted(local_endpoints),
+            "risk_summary": risk_items,
+            "rows": matched_rows,
+        }
 
     def _build_snapshot_process_items(self):
         """Build a detailed point-in-time process/network fingerprint."""
@@ -1067,14 +1189,22 @@ class MonitorApp:
             print("Usage: alertslog [N], where N is a positive number.")
             return
 
-        log_path = os.path.join("logs", "alerts.jsonl")
-        if not os.path.exists(log_path):
+        log_paths = []
+        alert_dir = os.path.join("logs", "alerts")
+        if os.path.isdir(alert_dir):
+            for name in sorted(os.listdir(alert_dir)):
+                if name.lower().endswith(".jsonl"):
+                    log_paths.append(os.path.join(alert_dir, name))
+
+        if not log_paths:
             print("No alert log file yet.")
             return
 
+        lines = []
         try:
-            with open(log_path, "r", encoding="utf-8") as f:
-                lines = [ln.strip() for ln in f if ln.strip()]
+            for path in log_paths:
+                with open(path, "r", encoding="utf-8") as f:
+                    lines.extend([ln.strip() for ln in f if ln.strip()])
         except Exception as exc:
             print(f"Failed to read alert log: {exc}")
             return
@@ -1157,6 +1287,14 @@ class MonitorApp:
 
         gui = MainWindow(self)
         gui.create_window()
+
+    def open_analysis_page(self):
+        """Open desktop analysis page in the default browser."""
+        try:
+            webbrowser.open(self.analysis_page_url)
+            print(f"Opened analysis page: {self.analysis_page_url}")
+        except Exception as exc:
+            print(f"Failed to open analysis page: {exc}")
 
     def permissions_diag(self):
         print("\n" + "=" * 80)

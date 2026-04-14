@@ -6,6 +6,7 @@ import ipaddress
 import time
 from collections import defaultdict
 from typing import Dict, List, Tuple
+from core.user_settings import load_settings
 
 
 class ThreatEngine:
@@ -15,6 +16,7 @@ class ThreatEngine:
         self.config_dir = "config"
         os.makedirs(self.config_dir, exist_ok=True)
 
+        self.settings = load_settings()
         self.threats = self._load_threats()
         self.whitelist = self._load_whitelist()
 
@@ -29,6 +31,10 @@ class ThreatEngine:
         # History for "NEW" detections
         self.seen_processes = set()
         self.seen_ips = set()
+
+    def _private_networks(self):
+        network_cfg = self.settings.get("network", {})
+        return network_cfg.get("private_networks", [])
 
     def _load_threats(self) -> Dict:
         """Load or create default threat database."""
@@ -69,9 +75,18 @@ class ThreatEngine:
         """Check if IP is in malicious list (supports CIDR)."""
         if not ip:
             return False
-        # Skip local networks
-        if ip.startswith(("192.168.", "10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.")):
-            return False
+        network_cfg = self.settings.get("network", {})
+        if network_cfg.get("skip_private_ips_for_threat_checks", True):
+            try:
+                ip_obj = ipaddress.ip_address(ip)
+                for network in self._private_networks():
+                    try:
+                        if ip_obj in ipaddress.ip_network(network, strict=False):
+                            return False
+                    except ValueError:
+                        continue
+            except ValueError:
+                return False
 
         for bad in self.threats.get("malicious_ips", []):
             try:

@@ -35,7 +35,10 @@
   }
 
   document.addEventListener("keydown", (e) => {
-    if (e.repeat && !isBackKey(e)) return;
+    if (e.repeat && !isBackKey(e)) {
+      e.preventDefault();
+      return;
+    }
 
     if (e.key === "Tab" || e.key.toLowerCase() === "m") {
       e.preventDefault();

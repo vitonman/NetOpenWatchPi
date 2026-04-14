@@ -16,8 +16,10 @@
     .screen::before{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.18) 3px)}
     .top{height:38px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 8px;color:var(--dim);font-size:24px}
     .list{margin-top:8px;height:335px;border:1px solid var(--line);background:var(--panel);padding:6px;overflow:hidden}
+    .section{margin:4px 0 6px;color:var(--dim);font-size:22px}
     .row{font-size:22px;line-height:1.15;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .row.selected{background:rgba(153,255,159,.10);border-left:2px solid var(--text)}
+    .section{margin:4px 0 6px;color:var(--dim);font-size:22px}
     .warn{color:var(--warn)} .bad{color:var(--bad)}
     .footer{margin-top:8px;height:42px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-around;color:var(--dim);font-size:24px}
     .tab{border:1px solid var(--line);padding:1px 8px}
@@ -49,8 +51,11 @@
     const API = "http://192.168.0.54:8765";
     const MAX_ROWS = 14;
     let processesCache = [];
-    let selectedIndex = 0;
     let processOffset = 0;
+    let processView = "list";
+    let processDetail = null;
+    let selectedPid = null;
+    let detailOffset = 0;
 
     function sev(conn){
       if(conn >= 30) return "bad";
@@ -67,68 +72,129 @@
         return;
       }
 
-      list.innerHTML = visible.map((p, idx)=>{
-        const cls = sev(p.connections || 0);
-        const pid = p.pid ?? "N/A";
-        const c = p.connections ?? 0;
-        const ips = p.unique_ips ?? 0;
-        const selected = idx === selectedIndex ? " selected" : "";
-        return `<div class="row ${cls}${selected}">[${pid}] ${p.name} | conn=${c} | ips=${ips}</div>`;
-      }).join("");
-    }
-
-    function clampSelection(){
-      const visibleCount = Math.min(MAX_ROWS, Math.max(processesCache.length - processOffset, 0));
-      if (visibleCount <= 0) {
-        selectedIndex = 0;
-        processOffset = 0;
-        return;
-      }
-      if (selectedIndex >= visibleCount) {
-        selectedIndex = visibleCount - 1;
-      }
-      if (selectedIndex < 0) {
-        selectedIndex = 0;
-      }
+      list.innerHTML = [
+        `<div class="section">PROCESSES ${processOffset + 1}-${Math.min(processOffset + visible.length, processesCache.length)} / ${processesCache.length}</div>`,
+        `<div class="row">UP previous | DOWN next | SELECT detail</div>`,
+        ...visible.map((p, idx)=>{
+          const cls = sev(p.connections || 0);
+          const pid = p.pid ?? "N/A";
+          const c = p.connections ?? 0;
+          const ips = p.unique_ips ?? 0;
+          const selected = idx === 0 ? " selected" : "";
+          return `<div class="row ${cls}${selected}">[${pid}] ${p.name} | conn=${c} | ips=${ips}</div>`;
+        }),
+      ].join("");
     }
 
     function moveSelection(delta){
       if(!processesCache.length) return;
+      const maxOffset = Math.max(0, processesCache.length - 1);
+      processOffset = Math.max(0, Math.min(processOffset + delta, maxOffset));
+      renderProcesses();
+    }
 
-      const absoluteIndex = processOffset + selectedIndex + delta;
-      const maxIndex = processesCache.length - 1;
-      const nextAbsolute = Math.max(0, Math.min(absoluteIndex, maxIndex));
-
-      if (nextAbsolute < processOffset) {
-        processOffset = nextAbsolute;
-        selectedIndex = 0;
-      } else if (nextAbsolute >= processOffset + MAX_ROWS) {
-        processOffset = nextAbsolute - MAX_ROWS + 1;
-        selectedIndex = MAX_ROWS - 1;
-      } else {
-        selectedIndex = nextAbsolute - processOffset;
+    function renderProcessDetail(){
+      const list = document.getElementById("list");
+      const d = processDetail;
+      if (!d) {
+        list.innerHTML = `<div class="row bad">Process no longer active.</div>`;
+        return;
       }
 
-      clampSelection();
-      renderProcesses();
+      const protocols = Object.entries(d.protocols || {}).map(([k,v]) => `${k}=${v}`).join(" | ") || "-";
+      const states = Object.entries(d.states || {}).map(([k,v]) => `${k}=${v}`).join(" | ") || "-";
+      const uniqueIps = (d.unique_ips || []).slice(0, 4);
+      const remoteEndpoints = (d.remote_endpoints || []).slice(0, 4);
+      const localEndpoints = (d.local_endpoints || []).slice(0, 4);
+      const detailLines = [
+        `<div class="row">connections: ${d.connections || 0}</div>`,
+        `<div class="row">unique_ips: ${d.unique_ips_count || 0}</div>`,
+        `<div class="row">remote_endpoints: ${(d.remote_endpoints || []).length}</div>`,
+        `<div class="row">local_endpoints: ${(d.local_endpoints || []).length}</div>`,
+        `<div class="row">established: ${d.established || 0}</div>`,
+        `<div class="row">protocols: ${protocols}</div>`,
+        `<div class="row">states: ${states}</div>`,
+        `<div class="row">remote_endpoints</div>`,
+        ...(remoteEndpoints.length ? remoteEndpoints.map((ep) => `<div class="row">${ep}</div>`) : [`<div class="row">-</div>`]),
+        `<div class="row">local_endpoints</div>`,
+        ...(localEndpoints.length ? localEndpoints.map((ep) => `<div class="row">${ep}</div>`) : [`<div class="row">-</div>`]),
+        `<div class="section">unique_ips</div>`,
+        ...(uniqueIps.length ? uniqueIps.map((ip) => `<div class="row">${ip}</div>`) : [`<div class="row">-</div>`]),
+      ];
+      const maxOffset = Math.max(0, detailLines.length - MAX_ROWS);
+      if (detailOffset > maxOffset) detailOffset = maxOffset;
+      const visible = detailLines.slice(detailOffset, detailOffset + MAX_ROWS);
+
+      list.innerHTML = [
+        `<div class="section">${d.display_name || d.query || "PROCESS"} [${(d.pids || [])[0] ?? "N/A"}]</div>`,
+        `<div class="row">DETAIL ${detailOffset + 1}-${Math.min(detailOffset + visible.length, detailLines.length)} / ${detailLines.length}</div>`,
+        `<div class="row">UP previous | DOWN next | BACK list</div>`,
+        ...visible,
+      ].join("");
+    }
+
+    async function loadProcessDetail(pid, resetScroll = false){
+      selectedPid = pid;
+      if (resetScroll) {
+        detailOffset = 0;
+      }
+      try {
+        const r = await fetch(`${API}/api/processinfo?pid=${encodeURIComponent(pid)}`, {cache:"no-store"});
+        if (!r.ok) {
+          processDetail = null;
+        } else {
+          const j = await r.json();
+          processDetail = j.detail || null;
+        }
+      } catch (e) {
+        processDetail = null;
+      }
+      renderProcessDetail();
+    }
+
+    function moveDetail(delta){
+      if (processView !== "detail" || !processDetail) return;
+
+      const protocols = Object.entries(processDetail.protocols || {}).map(([k,v]) => `${k}=${v}`).join(" | ") || "-";
+      const states = Object.entries(processDetail.states || {}).map(([k,v]) => `${k}=${v}`).join(" | ") || "-";
+      const uniqueIps = (processDetail.unique_ips || []).slice(0, 4);
+      const remoteEndpoints = (processDetail.remote_endpoints || []).slice(0, 4);
+      const localEndpoints = (processDetail.local_endpoints || []).slice(0, 4);
+      const totalLines = [
+        `connections: ${processDetail.connections || 0}`,
+        `unique_ips: ${processDetail.unique_ips_count || 0}`,
+        `established: ${processDetail.established || 0}`,
+        `protocols: ${protocols}`,
+        `states: ${states}`,
+        `unique_ips`,
+        ...(uniqueIps.length ? uniqueIps : ["-"]),
+        `Endpoints`,
+        `remote_endpoints`,
+        ...(remoteEndpoints.length ? remoteEndpoints : ["-"]),
+        `local_endpoints`,
+        ...(localEndpoints.length ? localEndpoints : ["-"]),
+      ].length;
+
+      const maxOffset = Math.max(0, totalLines - MAX_ROWS);
+      detailOffset = Math.max(0, Math.min(detailOffset + delta, maxOffset));
+      renderProcessDetail();
     }
 
     async function tick(){
       document.getElementById("clock").textContent = new Date().toLocaleTimeString();
       try{
+        if (processView === "detail" && selectedPid != null) {
+          await loadProcessDetail(selectedPid, false);
+          return;
+        }
+
         const r = await fetch(`${API}/api/processes`, {cache:"no-store"});
         const j = await r.json();
-        const oldLen = processesCache.length;
         processesCache = j.items || [];
         const maxOffset = Math.max(0, processesCache.length - 1);
         if (processOffset > maxOffset) {
           processOffset = Math.max(0, processesCache.length - MAX_ROWS);
         }
-        if (!oldLen && processesCache.length) {
-          processOffset = 0;
-          selectedIndex = 0;
-        }
-        clampSelection();
         renderProcesses();
       }catch(e){
         document.getElementById("list").innerHTML = `<div class="row bad">HOST OFFLINE</div>`;
@@ -136,11 +202,50 @@
     }
 
     window.deviceNav = {
-      onBack() { window.location.href = "index.html"; return true; },
-      onUp() { moveSelection(-1); return true; },
-      onDown() { moveSelection(1); return true; },
-      onSelect() { return true; },
+      onBack() {
+        if (processView === "detail") {
+          processView = "list";
+          processDetail = null;
+          tick();
+        } else {
+          window.location.href = "index.html";
+        }
+        return true;
+      },
+      onUp() {
+        if (processView === "detail") {
+          moveDetail(-1);
+        } else {
+          moveSelection(-1);
+        }
+        return true;
+      },
+      onDown() {
+        if (processView === "detail") {
+          moveDetail(1);
+        } else {
+          moveSelection(1);
+        }
+        return true;
+      },
+      onSelect() {
+        if (processView === "detail") return true;
+        const selected = processesCache[processOffset];
+        if (!selected || selected.pid == null) return true;
+        processView = "detail";
+        loadProcessDetail(selected.pid, true);
+        return true;
+      },
     };
+
+    document.getElementById("list").addEventListener("wheel", (e) => {
+      e.preventDefault();
+      if (processView === "detail") {
+        moveDetail(e.deltaY > 0 ? 1 : -1);
+      } else {
+        moveSelection(e.deltaY > 0 ? 1 : -1);
+      }
+    }, { passive: false });
 
     tick();
     setInterval(tick, 2000);

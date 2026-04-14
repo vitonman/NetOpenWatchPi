@@ -15,7 +15,7 @@ The host machine runs the monitoring engine. The Pi screen acts as a compact das
 - Tracks connection counts, unique IPs, ports, states, and remote endpoints
 - Generates local `INFO / WARN / CRITICAL` alerts
 - Keeps alert state with cooldowns and `alert_resolved` events
-- Logs alerts to JSONL
+- Logs alerts to daily JSONL files
 - Builds live alert feeds for the frontend
 - Builds current risk summaries for suspicious processes
 - Creates point-in-time network snapshots for later analysis
@@ -57,7 +57,7 @@ The Pi UI lives in `netopenwatchpi-ui/`.
 - `overview.html` -> `F2 PC OVERVIEW`
 - `alerts.html` -> `F3 ALERTS`
 - `processes.html` -> `F4 PROCESSES`
-- `snapshot.html` -> desktop snapshot analysis page
+- `snapshot.html` -> desktop analysis page for `SNAPSHOTS` and `LOGS`
 
 ### F1 CLOCK
 
@@ -86,7 +86,8 @@ Modes:
 ### F4 PROCESSES
 
 - Current process list with connection counts
-- Navigation-ready list for future detailed process drill-down
+- Hardware-style navigation
+- Live process detail view with endpoints, IPs, protocols, and states
 
 ## Snapshot Model
 
@@ -99,6 +100,11 @@ Device side:
 Desktop side:
 
 - `snapshot.html`
+
+Desktop analysis page modes:
+
+- `SNAPSHOTS` -> browse saved snapshots and inspect process/network details
+- `LOGS` -> browse daily alert logs and inspect individual alert events
 
 Each snapshot stores:
 
@@ -114,6 +120,26 @@ Each snapshot stores:
 Snapshots are written to:
 
 - `logs/snapshots/`
+
+## Alert Logs
+
+Alert history is stored as daily files:
+
+- `logs/alerts/alerts_YYYY-MM-DD.jsonl`
+
+This is the long-term history.
+
+Device side:
+
+- `F3 -> LOGS`
+
+acts as a compact recent-history browser for quick review on the Pi display.
+
+Desktop side:
+
+- `snapshot.html` -> `LOGS`
+
+acts as the fuller day-by-day log browser.
 
 ## Controls / Navigation Model
 
@@ -168,6 +194,12 @@ Open locally:
 - `http://localhost:8080/alerts.html`
 - `http://localhost:8080/processes.html`
 - `http://localhost:8080/snapshot.html`
+
+Tray shortcut:
+
+- right-click the tray icon
+- choose `Open Analysis Page`
+- this opens the desktop analysis page in the default browser
 
 ## Raspberry Pi Frontend
 
@@ -235,24 +267,45 @@ Current important endpoints:
 - `/api/alerts/live`
 - `/api/alerts/risks`
 - `/api/alerts/logs`
+- `/api/logs/days`
+- `/api/logs/day?file=...`
 - `/api/snapshots/create`
 - `/api/snapshots/list`
 - `/api/snapshots/get?file=...`
 
 ## Config and Data Files
 
-- `config/config.json` - ignored processes
-- `config/threats.json` - threat/whitelist rules
-- `logs/alerts.jsonl` - alert history
+- `config/settings.json` - main user-facing settings
+- `config/threats.json` - threat database rules
+- `config/whitelist.json` - trusted IPs and trusted processes
 - `logs/alert_state.json` - persisted alert state
+- `logs/alerts/` - daily alert history files
 - `logs/snapshots/` - saved network snapshots
+
+### Main Settings
+
+Most user tuning should happen in `config/settings.json`.
+
+Important sections:
+
+- `ignored_processes`
+- `app.api_host`
+- `app.api_port`
+- `app.monitor_interval_sec`
+- `app.analysis_page_url`
+- `alerts.cooldowns_by_type`
+- `alerts.thresholds`
+- `risk.memory_ttl_sec`
+- `risk.noisy_processes`
+- `network.skip_private_ips_for_threat_checks`
+- `network.private_networks`
 
 ## Resetting State
 
 Stop the app and delete what you need:
 
 - `logs/alert_state.json` - reset seen/active alert state
-- `logs/alerts.jsonl` - reset alert history
+- `logs/alerts/` - reset alert history
 - `logs/snapshots/` - clear saved snapshots
 
 ## Project Structure
@@ -262,10 +315,11 @@ Stop the app and delete what you need:
 - `core/network_collector.py` - per-process network collection
 - `core/alert_manager.py` - alert lifecycle and anomaly rules
 - `core/threat_engine.py` - threat/risk rules
+- `core/user_settings.py` - merged user settings loader/defaults
 - `core/metrics.py` - hardware/system metrics
 - `gui/main_window.py` - GUI window
 - `tray/tray_manager.py` - tray integration
-- `netopenwatchpi-ui/` - Pi UI + desktop snapshot page
+- `netopenwatchpi-ui/` - Pi UI + desktop analysis page
 
 ## Current Status
 
@@ -275,11 +329,13 @@ Working now:
 - live alerts
 - stats
 - snapshots
-- desktop snapshot analysis
+- risks
+- device log browsing
+- desktop snapshot/log analysis
+- tray shortcut to analysis page
+- live process detail view
 - keyboard/device navigation foundation
 
 Still in progress:
 
-- richer `LOGS` details
-- full `F4 PROCESSES` drill-down and process detail view
 - tighter hardware control integration with the final encoder/button wiring

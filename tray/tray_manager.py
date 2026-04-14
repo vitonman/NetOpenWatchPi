@@ -23,6 +23,7 @@ class TrayManager:
             pystray.MenuItem("Show Status", self.show_status),
             pystray.MenuItem("Check Alerts", self.check_alerts),
             pystray.MenuItem("Open Main Window", self.open_gui_direct),
+            pystray.MenuItem("Open Analysis Page", self.open_analysis_page),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self.quit_app),
         )
@@ -48,6 +49,13 @@ class TrayManager:
             self.monitor_app.open_gui()
         except Exception as e:
             print(f"Error opening GUI window: {e}")
+
+    def open_analysis_page(self):
+        """Open desktop snapshot/log analysis page from tray menu."""
+        try:
+            self.monitor_app.open_analysis_page()
+        except Exception as e:
+            print(f"Error opening analysis page: {e}")
 
     def quit_app(self):
         print("\nQuitting from tray...")
