@@ -173,31 +173,47 @@ Current keyboard emulation:
 
 ## Quick Start (Windows Host)
 
+Create the virtual environment and install dependencies:
+
 ```powershell
 cd D:\Repos\NetOpenWatchPi
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+Run in diagnostic mode with the interactive CLI:
+
+```powershell
 python monitor.py
 ```
 
-Frontend dev server:
+Or run without activating the environment:
 
 ```powershell
-cd D:\Repos\NetOpenWatchPi\netopenwatchpi-ui
-python -m http.server 8080
+.\venv\Scripts\python.exe monitor.py
 ```
 
-`monitor.py` also starts the static frontend server automatically on port `8080`.
-Run the manual frontend dev server only when you explicitly want to serve the UI separately.
+`monitor.py` starts both the API server on port `8765` and the static frontend server on port `8080`.
 
 Open locally:
 
+- `http://localhost:8765/api/status`
 - `http://localhost:8080/index.html`
 - `http://localhost:8080/overview.html`
 - `http://localhost:8080/alerts.html`
 - `http://localhost:8080/processes.html`
 - `http://localhost:8080/snapshot.html`
+
+## Background Mode (Windows Host)
+
+For background use, run `monitor.py` with the virtual environment's `pythonw.exe`, for example from Windows Task Scheduler:
+
+- Program/script: `D:\Repos\NetOpenWatchPi\venv\Scripts\pythonw.exe`
+- Arguments: `D:\Repos\NetOpenWatchPi\monitor.py`
+- Start in: `D:\Repos\NetOpenWatchPi`
+
+This starts the monitoring loop, API server, static frontend server, and tray integration without keeping a terminal window open.
 
 Tray shortcut:
 
@@ -207,23 +223,17 @@ Tray shortcut:
 
 ## Raspberry Pi Frontend
 
-On the Pi:
+The Raspberry Pi is used as a display/control device. The host PC still runs `monitor.py`, the API server, and the static frontend server.
 
-```bash
-cd ~/Repos/NetOpenWatchPi/netopenwatchpi-ui
-python3 -m http.server 8080 --bind 0.0.0.0
-```
+On the Pi, open the host PC frontend address in Chromium:
 
-Then open:
-
-- `http://<pi-ip>:8080/index.html`
+- `http://<host-pc-ip>:8080/index.html`
 
 Important:
 
-- Pi frontend is just static HTML/CSS/JS
-- host monitoring/API still runs on the monitored PC
-- UI pages use the host API base URL, for example:
-  - `http://192.168.0.54:8765`
+- The Pi should be on the same local network as the host PC.
+- The host PC can use DHCP for prototyping; for a more stable setup, use DHCP reservation, a static IP address, or a local DNS name.
+- UI pages derive the API host from the page URL. If the Pi opens `http://<host-pc-ip>:8080/index.html`, the UI calls `http://<host-pc-ip>:8765`.
 
 ## Temperatures on Windows
 
@@ -295,6 +305,9 @@ Important sections:
 - `ignored_processes`
 - `app.api_host`
 - `app.api_port`
+- `app.frontend_host`
+- `app.frontend_port`
+- `app.frontend_dir`
 - `app.monitor_interval_sec`
 - `app.analysis_page_url`
 - `alerts.cooldowns_by_type`
@@ -314,7 +327,7 @@ Stop the app and delete what you need:
 
 ## Project Structure
 
-- `monitor.py` - main runtime, CLI, background loop, embedded API startup
+- `monitor.py` - main runtime, CLI, background loop, embedded API startup, static frontend startup
 - `api/server.py` - HTTP API
 - `core/network_collector.py` - per-process network collection
 - `core/alert_manager.py` - alert lifecycle and anomaly rules
