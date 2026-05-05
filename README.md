@@ -31,6 +31,7 @@ It starts:
 
 - the background monitoring loop
 - the embedded API server
+- the static frontend server
 - the CLI
 - tray integration
 
@@ -186,6 +187,9 @@ Frontend dev server:
 cd D:\Repos\NetOpenWatchPi\netopenwatchpi-ui
 python -m http.server 8080
 ```
+
+`monitor.py` also starts the static frontend server automatically on port `8080`.
+Run the manual frontend dev server only when you explicitly want to serve the UI separately.
 
 Open locally:
 

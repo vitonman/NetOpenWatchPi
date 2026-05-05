@@ -14,6 +14,9 @@
     .safe{width:100%;height:100%;padding:12px}
     .screen{position:relative;width:100%;height:100%;border:2px solid var(--line);background:radial-gradient(circle at center,#0a1d10 0%,#061009 100%);padding:10px}
     .screen::before{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.18) 3px)}
+    .anim-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#041008;z-index:20;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 260ms ease, visibility 0s linear 260ms}
+    .anim-overlay.on{opacity:1;visibility:visible;transition:opacity 260ms ease}
+    .anim-overlay img{width:100%;height:100%;object-fit:cover;image-rendering:auto;filter:contrast(1.04) brightness(.95)}
     .top{height:38px;border:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 8px;color:var(--dim);font-size:24px}
     .right{display:flex;align-items:center;gap:10px}
     .mail{display:none;border:1px solid var(--bad);padding:0 6px;color:var(--bad);font-size:24px}
@@ -31,11 +34,14 @@
   </style>
 </head>
 <body>
-  <div class="safe">
-    <div class="screen">
-      <div class="top">
-        <div id="host">CLOCK</div>
-        <div class="right">
+    <div class="safe">
+      <div class="screen">
+        <div id="animOverlay" class="anim-overlay">
+          <img id="animPlayer" alt="Clock animation" />
+        </div>
+        <div class="top">
+          <div id="host">CLOCK</div>
+          <div class="right">
           <div id="mail" class="mail">MAIL</div>
           <div id="topClock">--:--:--</div>
         </div>
@@ -58,21 +64,42 @@
 
   <script src="nav.js"></script>
   <script>
-    const API = "http://192.168.0.54:8765";
+    const API = `${location.protocol}//${location.hostname}:8765`;
+    const ANIM_SRC = "anim/eyesanim.gif";
+    const ANIM_INTERVAL_MS = 20000;
+    const ANIM_DURATION_MS = 5000;
+    const ANIM_FADE_MS = 260;
     let indicatorInFlight = false;
-    let ackInFlight = false;
     let unacknowledgedCriticals = 0;
+    let animVisible = false;
+    let animHideTimer = null;
     window.deviceNav = {
       onBack() { return true; },
       onUp() { return true; },
       onDown() { return true; },
-      async onSelect() {
-        if (unacknowledgedCriticals > 0) {
-          await acknowledgeCriticals();
-        }
-        return true;
-      },
+      onSelect() { return true; },
     };
+
+    function playFullscreenAnim() {
+      if (animVisible) return;
+      animVisible = true;
+      const overlay = document.getElementById("animOverlay");
+      const player = document.getElementById("animPlayer");
+      player.src = "";
+      player.src = `${ANIM_SRC}?t=${Date.now()}`;
+      overlay.classList.add("on");
+
+      if (animHideTimer) {
+        clearTimeout(animHideTimer);
+      }
+      animHideTimer = setTimeout(() => {
+        overlay.classList.remove("on");
+        setTimeout(() => {
+          player.src = "";
+          animVisible = false;
+        }, ANIM_FADE_MS);
+      }, ANIM_DURATION_MS);
+    }
 
     function updateTime(){
       const now = new Date();
@@ -92,7 +119,7 @@
       if(unack > 0){
         mail.classList.add("on");
         info.classList.add("bad", "critical-box");
-        info.textContent = `UNACK CRITICAL ${unack} | SELECT ACK`;
+        info.textContent = `UNACK CRITICAL ${unack} | ACK IN F3 STATS`;
       }else if(activeCritical > 0){
         mail.classList.remove("on");
         info.classList.remove("critical-box");
@@ -102,22 +129,6 @@
         mail.classList.remove("on");
         info.classList.remove("bad", "critical-box");
         info.textContent = "No critical alerts";
-      }
-    }
-
-    async function acknowledgeCriticals(){
-      if (ackInFlight || unacknowledgedCriticals <= 0) return;
-      ackInFlight = true;
-      try{
-        const r = await fetch(`${API}/api/alerts/acknowledge-critical`, { cache:"no-store" });
-        const j = await r.json();
-        applyCriticalStats(j.stats || {});
-      }catch(e){
-        const info = document.getElementById("criticalInfo");
-        info.classList.add("bad");
-        info.textContent = "ACK FAILED";
-      }finally{
-        ackInFlight = false;
       }
     }
 
@@ -147,6 +158,7 @@
 
     tick();
     setInterval(tick, 2000);
+    setInterval(playFullscreenAnim, ANIM_INTERVAL_MS);
   </script>
 </body>
 </html>

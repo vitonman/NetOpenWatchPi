@@ -8,6 +8,8 @@ import json
 import webbrowser
 import psutil
 import socket
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from collections import defaultdict
 from core.metrics import metrics
 from core.network_collector import NetworkCollector
@@ -31,6 +33,9 @@ class MonitorApp:
         self.last_top_processes = []
         self.api_host = app_settings.get("api_host", "0.0.0.0")
         self.api_port = app_settings.get("api_port", 8765)
+        self.frontend_host = app_settings.get("frontend_host", "0.0.0.0")
+        self.frontend_port = app_settings.get("frontend_port", 8080)
+        self.frontend_dir = app_settings.get("frontend_dir", "netopenwatchpi-ui")
         self.monitor_interval_sec = app_settings.get("monitor_interval_sec", 2)
         self.analysis_page_url = app_settings.get("analysis_page_url", "http://localhost:8080/snapshot.html")
         self.current_processes = {}
@@ -246,13 +251,14 @@ class MonitorApp:
         recent_critical = next((item for item in self.live_feed if item.get("severity") == "CRITICAL"), None)
         active_critical_keys = self.alert_manager.get_active_critical_keys()
         unack_critical_keys = self.alert_manager.get_unacknowledged_critical_keys()
+        unack_active_critical = len([key for key in active_critical_keys if key in set(unack_critical_keys)])
 
         return {
             "last_hour": stats.get("last_hour", {}),
             "last_day": stats.get("last_day", {}),
             "active_total": len(self.alert_manager.active_alert_keys),
             "active_critical_total": len(active_critical_keys),
-            "acknowledged_critical_total": len(active_critical_keys) - len(unack_critical_keys),
+            "acknowledged_critical_total": len(active_critical_keys) - unack_active_critical,
             "unacknowledged_critical_total": len(unack_critical_keys),
             "has_unacknowledged_critical": bool(unack_critical_keys),
             "live_feed_total": len(self.live_feed),
@@ -649,18 +655,46 @@ class MonitorApp:
 
         threading.Thread(target=_api_runner, daemon=True).start()
 
+    def start_frontend_server(self):
+        """Serve the static frontend from netopenwatchpi-ui in a background thread."""
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        frontend_dir = self.frontend_dir
+        if not os.path.isabs(frontend_dir):
+            frontend_dir = os.path.join(base_dir, frontend_dir)
+
+        if not os.path.isdir(frontend_dir):
+            print(f"[WARN] Frontend directory not found: {frontend_dir}")
+            return
+
+        def _frontend_runner():
+            try:
+                handler = partial(SimpleHTTPRequestHandler, directory=frontend_dir)
+                server = ThreadingHTTPServer((self.frontend_host, self.frontend_port), handler)
+                print(f"Frontend server started: http://{self.frontend_host}:{self.frontend_port}")
+                server.serve_forever()
+            except Exception as exc:
+                print(f"[WARN] Frontend server failed to start: {exc}")
+
+        threading.Thread(target=_frontend_runner, daemon=True).start()
+
     def run(self):
         print_startup_info()
         print("Starting NetOpenWatchPi with System Tray...\n")
 
         threading.Thread(target=self.background_monitor, daemon=True).start()
         self.start_api()
+        self.start_frontend_server()
 
         self.tray = TrayManager(self)
         self.tray.create_tray()
         self.tray.run()
 
         print("System Tray is active. Right-click the tray icon to open menu.")
+
+        if not sys.stdin or not sys.stdin.isatty():
+            while self.running:
+                time.sleep(1)
+            return
 
         try:
             while self.running:

@@ -44,6 +44,7 @@ class AlertManager:
         self.state_path = "logs/alert_state.json"
         self.active_alert_keys = set()
         self.acknowledged_alert_keys = set()
+        self.latched_critical_keys = set()
         self.severity_by_type = {
             "high_connections": "WARN",
             "many_unique_ips": "WARN",
@@ -95,6 +96,7 @@ class AlertManager:
 
             self.active_alert_keys = set(data.get("active_alert_keys", []))
             self.acknowledged_alert_keys = set(data.get("acknowledged_alert_keys", []))
+            self.latched_critical_keys = set(data.get("latched_critical_keys", []))
         except Exception:
             # State load issues should not break monitoring
             pass
@@ -111,6 +113,7 @@ class AlertManager:
                 },
                 "active_alert_keys": sorted(self.active_alert_keys),
                 "acknowledged_alert_keys": sorted(self.acknowledged_alert_keys),
+                "latched_critical_keys": sorted(self.latched_critical_keys),
             }
             with open(self.state_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -155,6 +158,9 @@ class AlertManager:
             "ts": now,
             "event_key": event_key,
         }
+        if sev == "CRITICAL" and event_type != "alert_resolved":
+            self.latched_critical_keys.add(event_key)
+            self.acknowledged_alert_keys.discard(event_key)
         self._append_alert_log(event)
         return event
 
@@ -217,13 +223,14 @@ class AlertManager:
         return sorted(key for key in self.active_alert_keys if self._is_critical_event_key(key))
 
     def get_unacknowledged_critical_keys(self) -> List[str]:
-        return sorted(key for key in self.get_active_critical_keys() if key not in self.acknowledged_alert_keys)
+        return sorted(self.latched_critical_keys)
 
     def acknowledge_critical_alerts(self) -> int:
         keys = self.get_unacknowledged_critical_keys()
         if not keys:
             return 0
-        self.acknowledged_alert_keys.update(keys)
+        self.acknowledged_alert_keys.update(self.get_active_critical_keys())
+        self.latched_critical_keys.clear()
         self._save_state()
         return len(keys)
 

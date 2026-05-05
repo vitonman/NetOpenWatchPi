@@ -89,7 +89,7 @@
   </div>
 <script src="nav.js"></script>
 <script>
-  const API = "http://192.168.0.54:8765";
+  const API = `${location.protocol}//${location.hostname}:8765`;
   const POLL_MS = 2000;
   const MAX_ROWS = 12;
   const MODE_STORAGE_KEY = "netopenwatchpi_alerts_mode";
