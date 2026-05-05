@@ -146,7 +146,7 @@ acts as the fuller day-by-day log browser.
 
 The UI is being optimized for hardware controls rather than mouse-first navigation.
 
-Planned control model:
+Hardware control model:
 
 - `MODE` -> cycle `F1/F2/F3/F4`
 - `UP`
@@ -163,6 +163,10 @@ Current keyboard emulation:
 - `Enter` -> `SELECT`
 - `Escape` or `Backspace` -> `BACK`
 - hold `Escape` / `Backspace` -> `CLOCK`
+
+On Raspberry Pi, `raspberry-pi/gpio_nav_bridge_uinput.py` can convert GPIO
+button and rotary encoder input into the same keyboard events through Linux
+`uinput`.
 
 ## Requirements
 
@@ -234,6 +238,14 @@ Important:
 - The Pi should be on the same local network as the host PC.
 - The host PC can use DHCP for prototyping; for a more stable setup, use DHCP reservation, a static IP address, or a local DNS name.
 - UI pages derive the API host from the page URL. If the Pi opens `http://<host-pc-ip>:8080/index.html`, the UI calls `http://<host-pc-ip>:8765`.
+
+Pi-side GPIO navigation files are stored in:
+
+- `raspberry-pi/gpio_nav_bridge_uinput.py`
+- `raspberry-pi/netopenwatchpi-gpio.service`
+
+The service can be enabled with `systemd` so the GPIO navigation bridge starts
+automatically when the Raspberry Pi boots. See `raspberry-pi/README.md`.
 
 ## Temperatures on Windows
 
@@ -337,6 +349,7 @@ Stop the app and delete what you need:
 - `gui/main_window.py` - GUI window
 - `tray/tray_manager.py` - tray integration
 - `netopenwatchpi-ui/` - Pi UI + desktop analysis page
+- `raspberry-pi/` - GPIO navigation bridge and Pi-side systemd service
 
 ## Current Status
 
@@ -352,6 +365,7 @@ Working now:
 - tray shortcut to analysis page
 - live process detail view
 - keyboard/device navigation foundation
+- Raspberry Pi GPIO navigation bridge prototype
 
 Still in progress:
 
