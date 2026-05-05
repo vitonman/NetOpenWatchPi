@@ -243,9 +243,13 @@ Pi-side GPIO navigation files are stored in:
 
 - `raspberry-pi/gpio_nav_bridge_uinput.py`
 - `raspberry-pi/netopenwatchpi-gpio.service`
+- `raspberry-pi/start_kiosk.sh`
+- `raspberry-pi/netopenwatchpi-kiosk.desktop`
 
 The service can be enabled with `systemd` so the GPIO navigation bridge starts
 automatically when the Raspberry Pi boots. See `raspberry-pi/README.md`.
+The kiosk launcher can be added to the Raspberry Pi desktop autostart folder so
+Chromium opens the host frontend automatically after graphical login.
 
 ## Temperatures on Windows
 

@@ -38,6 +38,12 @@ cd ~/NetOpenWatchPi/raspberry-pi
 sudo python3 gpio_nav_bridge_uinput.py
 ```
 
+Start Chromium in kiosk mode manually:
+
+```bash
+./start_kiosk.sh http://<host-pc-ip>:8080/index.html
+```
+
 ## Autostart With systemd
 
 Copy the service file:
@@ -63,3 +69,37 @@ Check status and logs:
 systemctl status netopenwatchpi-gpio.service
 journalctl -u netopenwatchpi-gpio.service -f
 ```
+
+## Autostart Chromium Kiosk
+
+The kiosk launcher should start after the Raspberry Pi graphical desktop login,
+because Chromium needs a desktop session.
+
+Make the launcher executable:
+
+```bash
+chmod +x start_kiosk.sh
+```
+
+Copy the desktop autostart file:
+
+```bash
+mkdir -p ~/.config/autostart
+cp netopenwatchpi-kiosk.desktop ~/.config/autostart/
+```
+
+Edit the copied file and replace `HOST-IP` with the Windows host PC local IP
+address:
+
+```bash
+nano ~/.config/autostart/netopenwatchpi-kiosk.desktop
+```
+
+Example:
+
+```text
+Exec=/home/pi/NetOpenWatchPi/raspberry-pi/start_kiosk.sh http://192.168.0.54:8080/index.html
+```
+
+After the next Raspberry Pi desktop login, Chromium opens the NetOpenWatchPi UI
+in kiosk mode.

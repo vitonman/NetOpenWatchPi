@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=NetOpenWatchPi Kiosk
+Comment=Open NetOpenWatchPi frontend in Chromium kiosk mode
+Exec=/home/pi/NetOpenWatchPi/raspberry-pi/start_kiosk.sh http://HOST-IP:8080/index.html
+Terminal=false
+X-GNOME-Autostart-enabled=true
